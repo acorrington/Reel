@@ -96,6 +96,17 @@ manually from the item's edit page; the next run retries automatically.
 - `tools/EmbyLinkProbe` — reflects the Emby API surface (used to verify the F-42 link path).
 - `tools/test-*.ps1`, `tools/h2test` — Trawler's InnerTube/range-cap research harness (inherited).
 
+## Emby API pitfalls (learned the hard way)
+
+- **`POST /System/Configuration` is a FULL replace.** Sending a one-field body overwrites the
+  entire `system.xml` with defaults (setup wizard reappears, language prefs lost, …). Always
+  `GET /System/Configuration` → modify → POST the whole object back, or use the partial-update
+  endpoint (`UpdatePartialConfiguration`) instead.
+- `POST /Library/VirtualFolders?name=X&type=Y` needs the **`collectionType`** query parameter
+  (`type` is ignored → folder created with no content type).
+- `LibraryMonitorDelaySeconds` (90 s on this server) delays indexing of newly written files —
+  do not assume a just-installed file is queryable via `FindByPath` immediately.
+
 ## Requirements
 
 See [REQUIREMENTS.md](REQUIREMENTS.md) (the spec this plugin implements: F/E/N IDs are
