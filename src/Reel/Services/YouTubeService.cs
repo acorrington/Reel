@@ -36,6 +36,7 @@ public sealed class YouTubeService
     // User-Agents verified working against InnerTube and googlevideo from this machine.
     public const string DefaultAndroidVersion = "20.10.3";
     public const string DefaultIosVersion = "20.10.4";
+    public const string DefaultWebSearchVersion = "2.20251006.01.00";
     public const string UaIos = "com.google.ios.youtube/20.10.4 (iPhone16,2; U; CPU iOS 17_5_1 like Mac OS X;)";
     public const string UaAndroid = "com.google.android.youtube/20.10.3 (Linux; U; Android 14) gzip";
     public const string UaAndroidVr = "com.google.android.apps.youtube.vr.oculus/1.60.19 (Linux; U; Android 12L; Quest 3 Build/SQ3A.220605.009.A1) gzip";
@@ -757,22 +758,26 @@ public sealed class YouTubeService
         public long DurationSeconds;
     }
 
+    /// <summary>
+    /// InnerTube search via the **WEB** client.
+    /// 2026-10 finding: the IOS client no longer receives search results at all (payload is
+    /// dialogs/chrome only, zero videoRenderers) while WEB returns full results — so search
+    /// uses WEB and its version is config-editable (F-56/N-05 zero-rebuild proofing). The
+    /// player/stream chain (ANDROID → IOS → ANDROID_VR → HTML) is unaffected and unchanged.
+    /// </summary>
     private async Task<List<SearchHit>> SearchInnerTubeAsync(string query, CancellationToken ct)
     {
         var cfg = Plugin.Instance?.Configuration;
-        var iosVersion = string.IsNullOrWhiteSpace(cfg?.IosClientVersion) ? DefaultIosVersion : cfg.IosClientVersion.Trim();
-        var iosUa = IosUaFor(iosVersion);
+        var webVersion = string.IsNullOrWhiteSpace(cfg?.WebSearchClientVersion)
+            ? DefaultWebSearchVersion
+            : cfg.WebSearchClientVersion.Trim();
+        var ua = UaChrome;
 
-        var visitor = await GetVisitorDataAsync(iosUa, ct).ConfigureAwait(false);
+        var visitor = await GetVisitorDataAsync(ua, ct).ConfigureAwait(false);
         var client = new Dictionary<string, object>
         {
-            ["clientName"] = "IOS",
-            ["clientVersion"] = iosVersion,
-            ["deviceMake"] = "Apple",
-            ["deviceModel"] = "iPhone16,2",
-            ["osName"] = "iOS",
-            ["osVersion"] = "17.5.1.21F90",
-            ["platform"] = "MOBILE",
+            ["clientName"] = "WEB",
+            ["clientVersion"] = webVersion,
             ["hl"] = "en",
             ["gl"] = "US",
             ["utcOffsetMinutes"] = 0
@@ -791,9 +796,11 @@ public sealed class YouTubeService
         using var resp = await SendWithRetryAsync(
             () =>
             {
-                var req = new HttpRequestMessage(HttpMethod.Post, "https://www.youtube.com/youtubei/v1/search");
-                req.Headers.TryAddWithoutValidation("User-Agent", iosUa);
+                var req = new HttpRequestMessage(HttpMethod.Post, "https://www.youtube.com/youtubei/v1/search?prettyPrint=false");
+                req.Headers.TryAddWithoutValidation("User-Agent", ua);
                 req.Headers.TryAddWithoutValidation("Cookie", ConsentCookie);
+                req.Headers.TryAddWithoutValidation("X-Youtube-Client-Name", "1");
+                req.Headers.TryAddWithoutValidation("X-Youtube-Client-Version", webVersion);
                 req.Content = new StringContent(body, Encoding.UTF8, "application/json");
                 return req;
             },
@@ -801,7 +808,9 @@ public sealed class YouTubeService
 
         if (!resp.IsSuccessStatusCode)
         {
-            _logger.Warn("Reel: InnerTube search failed: HTTP {0}", (int)resp.StatusCode);
+            // E-03: name the failing client + version so it can be fixed from the config page.
+            _logger.Warn("Reel: InnerTube WEB search (clientVersion {0}) failed: HTTP {1} — update WebSearchClientVersion in the plugin config if this persists",
+                webVersion, (int)resp.StatusCode);
             return new List<SearchHit>();
         }
 

@@ -17,6 +17,7 @@ define(['baseView', 'loading', 'emby-input', 'emby-button', 'emby-checkbox', 'em
         page.querySelector('#FfmpegPathOverride').value = config.FfmpegPathOverride || '';
         page.querySelector('#AndroidClientVersion').value = config.AndroidClientVersion || '20.10.3';
         page.querySelector('#IosClientVersion').value = config.IosClientVersion || '20.10.4';
+        page.querySelector('#WebSearchClientVersion').value = config.WebSearchClientVersion || '2.20251006.01.00';
         page.querySelector('#PreferIosClient').checked = config.PreferIosClient === true;
         page.querySelector('#LastRunSummary').value = config.LastRunSummary || 'Never run';
 
@@ -51,6 +52,7 @@ define(['baseView', 'loading', 'emby-input', 'emby-button', 'emby-checkbox', 'em
             config.FfmpegPathOverride = form.querySelector('#FfmpegPathOverride').value;
             config.AndroidClientVersion = form.querySelector('#AndroidClientVersion').value;
             config.IosClientVersion = form.querySelector('#IosClientVersion').value;
+            config.WebSearchClientVersion = form.querySelector('#WebSearchClientVersion').value;
             config.PreferIosClient = form.querySelector('#PreferIosClient').checked;
 
             ApiClient.updatePluginConfiguration(PLUGIN_ID, config).then(Dashboard.processPluginConfigurationUpdateResult);

@@ -111,19 +111,29 @@ public sealed class MatchGate
 
     // ------------------------------------------------------------------ individual gates (log + reject, null = pass)
 
-    private GateDecision CheckHygiene(string videoNorm)
+    private GateDecision CheckHygiene(string videoNorm, string channelNorm)
     {
+        // Patterns are checked against the title AND the channel: "Artist – Topic" auto-uploads
+        // (REQUIREMENTS §2's named noise class) carry "topic" in the channel name, not the title.
         foreach (var (pattern, isPrefix) in LoadExcludePatterns(Config.ExcludeTitlePatterns))
         {
             // trailing * in the config value = prefix wildcard (remix* matches remixes)
-            var hit = isPrefix
-                ? (" " + videoNorm + " ").Contains(" " + pattern, StringComparison.Ordinal)
-                : NeedsCheck.ContainsNormalized(videoNorm, pattern);
-
-            if (hit)
+            foreach (var haystack in new[] { videoNorm, channelNorm })
             {
-                _logger.Debug("Reel: gate: reject (hygiene: matches exclude pattern \"{0}\")", pattern);
-                return GateDecision.Reject("hygiene", $"title matches exclude pattern \"{pattern}\"");
+                if (string.IsNullOrEmpty(haystack))
+                {
+                    continue;
+                }
+
+                var hit = isPrefix
+                    ? (" " + haystack + " ").Contains(" " + pattern, StringComparison.Ordinal)
+                    : NeedsCheck.ContainsNormalized(haystack, pattern);
+
+                if (hit)
+                {
+                    _logger.Debug("Reel: gate: reject (hygiene: matches exclude pattern \"{0}\")", pattern);
+                    return GateDecision.Reject("hygiene", $"matches exclude pattern \"{pattern}\"");
+                }
             }
         }
 
@@ -224,7 +234,7 @@ public sealed class MatchGate
             return GateDecision.Reject("metadata", "empty search title");
         }
 
-        var decision = CheckHygiene(videoNorm)
+        var decision = CheckHygiene(videoNorm, null)
                        ?? CheckTitle(NeedsCheck.Normalize(songTitle), videoNorm)
                        ?? (searchDurationSeconds > 0
                            ? CheckDuration(songDurationSeconds, searchDurationSeconds)
@@ -257,7 +267,7 @@ public sealed class MatchGate
         var channelNorm = GateNormalize(details.Channel);
         var songNorm = NeedsCheck.Normalize(songTitle);
 
-        var decision = CheckHygiene(videoNorm)
+        var decision = CheckHygiene(videoNorm, channelNorm)
                        ?? CheckArtist(videoNorm, channelNorm, artists)
                        ?? CheckTitle(songNorm, videoNorm)
                        ?? CheckDuration(songDurationSeconds, details.DurationSeconds);

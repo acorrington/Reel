@@ -68,8 +68,12 @@ public class PluginConfiguration : BasePluginConfiguration
     /// <summary>InnerTube ANDROID client version. Empty = built-in default.</summary>
     public string AndroidClientVersion { get; set; } = "20.10.3";
 
-    /// <summary>InnerTube IOS client version. Empty = built-in default.</summary>
+    /// <summary>InnerTube IOS client version (player chain). Empty = built-in default.</summary>
     public string IosClientVersion { get; set; } = "20.10.4";
+
+    /// <summary>InnerTube WEB client version used for SEARCH (the IOS client stopped serving
+    /// search results entirely in 2026-10; WEB works). Empty = built-in default.</summary>
+    public string WebSearchClientVersion { get; set; } = "2.20251006.01.00";
 
     /// <summary>Query the IOS client before ANDROID (use when ANDROID requests are blocked from your network).</summary>
     public bool PreferIosClient { get; set; } = false;
