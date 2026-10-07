@@ -747,10 +747,14 @@ public sealed class YouTubeService
 
     // ------------------------------------------------------------------ InnerTube search (F-11)
 
-    private sealed class SearchHit
+    /// <summary>One InnerTube search result: id, title and (when shown) duration.</summary>
+    public sealed class SearchHit
     {
         public string VideoId;
         public string Title;
+
+        /// <summary>Duration from the result's lengthText ("3:45"); 0 = not shown.</summary>
+        public long DurationSeconds;
     }
 
     private async Task<List<SearchHit>> SearchInnerTubeAsync(string query, CancellationToken ct)
@@ -831,7 +835,23 @@ public sealed class YouTubeService
 
                     if (!string.IsNullOrEmpty(id) && !string.IsNullOrEmpty(title))
                     {
-                        hits.Add(new SearchHit { VideoId = id, Title = title });
+                        long duration = 0;
+                        if (vr.TryGetProperty("lengthText", out var lt) && lt.ValueKind == JsonValueKind.Object)
+                        {
+                            string durationText = null;
+                            if (lt.TryGetProperty("simpleText", out var stx) && stx.ValueKind == JsonValueKind.String)
+                            {
+                                durationText = stx.GetString();
+                            }
+                            else if (lt.TryGetProperty("runs", out var lruns) && lruns.ValueKind == JsonValueKind.Array && lruns.GetArrayLength() > 0)
+                            {
+                                durationText = GetString(lruns[0], "text");
+                            }
+
+                            duration = ParseDurationText(durationText);
+                        }
+
+                        hits.Add(new SearchHit { VideoId = id, Title = title, DurationSeconds = duration });
                     }
 
                     return;
@@ -854,18 +874,147 @@ public sealed class YouTubeService
         }
     }
 
-    /// <summary>
-    /// Search YouTube for a trailer matching a movie title/year (F-11).
-    /// Prefers results whose title contains "trailer". Returns up to <paramref name="maxResults"/> ids.
-    /// </summary>
-    public async Task<List<string>> SearchTrailerIdsAsync(string title, int year, int maxResults, CancellationToken ct)
+    /// <summary>"3:45" / "1:02:03" → seconds; unparsable → 0.</summary>
+    public static long ParseDurationText(string text)
     {
-        if (string.IsNullOrWhiteSpace(title) || maxResults <= 0)
+        if (string.IsNullOrWhiteSpace(text))
         {
-            return new List<string>();
+            return 0;
         }
 
-        var query = year > 0 ? $"{title} {year} official trailer" : $"{title} official trailer";
+        long seconds = 0;
+        foreach (var part in text.Split(':'))
+        {
+            if (!long.TryParse(part.Trim(), out var value))
+            {
+                return 0;
+            }
+
+            seconds = seconds * 60 + value;
+        }
+
+        return seconds;
+    }
+
+    /// <summary>
+    /// Fetch title/channel/duration for a video without downloading it (F-20's duration
+    /// source: InnerTube player response `videoDetails.lengthSeconds`). Tries the configured
+    /// client chain, then the watch-page HTML — same order as ResolveAsync. Null when every
+    /// path fails (the gate treats that as doubt and skips, F-22).
+    /// </summary>
+    public async Task<VideoDetails> GetVideoDetailsAsync(string videoId, CancellationToken ct)
+    {
+        foreach (var spec in BuildPlayerClients())
+        {
+            try
+            {
+                var json = await RequestPlayerAsync(videoId, spec, ct).ConfigureAwait(false);
+                if (json == null)
+                {
+                    continue;
+                }
+
+                using var doc = JsonDocument.Parse(json);
+                var playMsg = GetPlayability(doc.RootElement, out var ok);
+                if (!ok)
+                {
+                    _logger.Debug("Reel: {0} client metadata for {1}: {2}", spec.Name, videoId, playMsg);
+                    continue;
+                }
+
+                var details = ParseVideoDetails(doc.RootElement, videoId);
+                if (details != null)
+                {
+                    return details;
+                }
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                _logger.Warn("Reel: {0} metadata request failed for {1}: {2}", spec.Name, videoId, ex.Message);
+            }
+        }
+
+        try
+        {
+            var json = await FetchWatchPagePlayerJsonAsync(videoId, ct).ConfigureAwait(false);
+            if (json != null)
+            {
+                using var doc = JsonDocument.Parse(json);
+                GetPlayability(doc.RootElement, out var ok);
+                if (ok)
+                {
+                    var details = ParseVideoDetails(doc.RootElement, videoId);
+                    if (details != null)
+                    {
+                        return details;
+                    }
+                }
+            }
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            _logger.Warn("Reel: HTML metadata fallback failed for {0}: {1}", videoId, ex.Message);
+        }
+
+        return null;
+    }
+
+    private static VideoDetails ParseVideoDetails(JsonElement root, string videoId)
+    {
+        if (!root.TryGetProperty("videoDetails", out var vd) || vd.ValueKind != JsonValueKind.Object)
+        {
+            return null;
+        }
+
+        var title = GetString(vd, "title");
+        if (string.IsNullOrWhiteSpace(title))
+        {
+            return null;
+        }
+
+        long seconds = 0;
+        if (vd.TryGetProperty("lengthSeconds", out var ls))
+        {
+            if (ls.ValueKind == JsonValueKind.String)
+            {
+                long.TryParse(ls.GetString(), out seconds);
+            }
+            else if (ls.ValueKind == JsonValueKind.Number)
+            {
+                seconds = ls.GetInt64();
+            }
+        }
+
+        return new VideoDetails
+        {
+            VideoId = videoId,
+            Title = title,
+            Channel = GetString(vd, "author"),
+            DurationSeconds = seconds
+        };
+    }
+
+    /// <summary>
+    /// Search YouTube for "{artist} {title} official video" (F-11) using the same InnerTube
+    /// search as Trawler. Returns hits (id, title, duration) — "official video" titled results
+    /// first — up to <paramref name="maxResults"/>.
+    /// </summary>
+    public async Task<List<SearchHit>> SearchMusicVideoIdsAsync(string artist, string title, int maxResults, CancellationToken ct)
+    {
+        if (maxResults <= 0 || (string.IsNullOrWhiteSpace(artist) && string.IsNullOrWhiteSpace(title)))
+        {
+            return new List<SearchHit>();
+        }
+
+        var query = $"{artist} {title} official video";
         _logger.Info("Reel: searching YouTube for \"{0}\"", query);
 
         try
@@ -873,11 +1022,11 @@ public sealed class YouTubeService
             var hits = await SearchInnerTubeAsync(query, ct).ConfigureAwait(false);
             if (hits.Count == 0)
             {
-                return new List<string>();
+                return new List<SearchHit>();
             }
 
             var ordered = hits
-                .Where(h => h.Title.Contains("trailer", StringComparison.OrdinalIgnoreCase))
+                .Where(h => h.Title.Contains("official", StringComparison.OrdinalIgnoreCase))
                 .Concat(hits)
                 .GroupBy(h => h.VideoId)
                 .Select(g => g.First())
@@ -886,10 +1035,10 @@ public sealed class YouTubeService
 
             foreach (var hit in ordered)
             {
-                _logger.Debug("Reel: search candidate: {0} -> {1}", hit.Title, hit.VideoId);
+                _logger.Debug("Reel: search candidate: {0} -> {1} ({2}s)", hit.Title, hit.VideoId, hit.DurationSeconds);
             }
 
-            return ordered.Select(h => h.VideoId).ToList();
+            return ordered;
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
@@ -898,7 +1047,7 @@ public sealed class YouTubeService
         catch (Exception ex)
         {
             _logger.Warn("Reel: YouTube search failed: {0}", ex);
-            return new List<string>();
+            return new List<SearchHit>();
         }
     }
 }

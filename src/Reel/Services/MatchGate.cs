@@ -31,12 +31,16 @@ public sealed class GateDecision
 /// The confidence gate (F-20..F-22): a candidate passes only if EVERY enabled gate passes.
 /// On any doubt → reject and log the reason with the videoId; never "best effort".
 ///
-/// Gates, in evaluation order:
+/// Gates:
 ///   1. metadata  — video title/duration could not be determined at all
 ///   2. hygiene   — YouTube title matches an exclude pattern (lyric/karaoke/cover/…, F-21)
 ///   3. artist    — the artist's name appears neither in the title nor the channel name
 ///   4. title     — the song's title does not appear in the video title (wrong-song guard)
 ///   5. duration  — video length outside DurationTolerancePercent of the audio track (F-20)
+///
+/// <see cref="PreCheck"/> runs the cheap gates (hygiene/title/duration) against search-result
+/// metadata first, so obviously-bad candidates never spend a player request. The full
+/// <see cref="Evaluate"/> then runs against authoritative player metadata.
 ///
 /// Every decision is logged at debug level so match quality can be tuned (N-04).
 /// </summary>
@@ -51,7 +55,7 @@ public sealed class MatchGate
 
     private static PluginConfiguration Config => Plugin.Instance?.Configuration ?? new PluginConfiguration();
 
-    // ------------------------------------------------------------------ helpers
+    // ------------------------------------------------------------------ normalization
 
     /// <summary>Gate normalization: lowercase + punctuation→space, but bracket CONTENT is kept —
     /// hygiene must see "(Lyric Video)" and containment must see "(Official Video)".</summary>
@@ -105,31 +109,10 @@ public sealed class MatchGate
         }
     }
 
-    // ------------------------------------------------------------------ evaluation
+    // ------------------------------------------------------------------ individual gates (log + reject, null = pass)
 
-    /// <summary>
-    /// Evaluate one candidate. <paramref name="artists"/> are the song's artists,
-    /// <paramref name="songTitle"/> the song's title, <paramref name="songDurationSeconds"/>
-    /// the audio item's runtime; <paramref name="details"/> the candidate's YouTube metadata
-    /// (null when it could not be fetched).
-    /// </summary>
-    public GateDecision Evaluate(IReadOnlyList<string> artists, string songTitle, long songDurationSeconds, VideoDetails details)
+    private GateDecision CheckHygiene(string videoNorm)
     {
-        // -- gate 0: metadata -------------------------------------------------
-        if (details == null)
-        {
-            _logger.Debug("Reel: gate: reject (metadata: no title/duration available)");
-            return GateDecision.Reject("metadata", "no title/duration available");
-        }
-
-        var videoNorm = GateNormalize(details.Title);
-        if (videoNorm.Length == 0)
-        {
-            _logger.Debug("Reel: gate: reject (metadata: empty video title)");
-            return GateDecision.Reject("metadata", "empty video title");
-        }
-
-        // -- gate 1: title hygiene (F-21) -------------------------------------
         foreach (var (pattern, isPrefix) in LoadExcludePatterns(Config.ExcludeTitlePatterns))
         {
             // trailing * in the config value = prefix wildcard (remix* matches remixes)
@@ -139,13 +122,16 @@ public sealed class MatchGate
 
             if (hit)
             {
-                _logger.Debug("Reel: gate: reject (hygiene: title matches exclude pattern \"{0}\") — \"{1}\"", pattern, details.Title);
+                _logger.Debug("Reel: gate: reject (hygiene: matches exclude pattern \"{0}\")", pattern);
                 return GateDecision.Reject("hygiene", $"title matches exclude pattern \"{pattern}\"");
             }
         }
 
-        // -- gate 2: artist containment (approved extension) -------------------
-        var channelNorm = GateNormalize(details.Channel);
+        return null;
+    }
+
+    private GateDecision CheckArtist(string videoNorm, string channelNorm, IReadOnlyList<string> artists)
+    {
         var artistNorms = new List<string>();
         if (artists != null)
         {
@@ -161,18 +147,21 @@ public sealed class MatchGate
             return GateDecision.Reject("artist", "song has no artist tag");
         }
 
-        var artistSeen = artistNorms.Any(v =>
+        var seen = artistNorms.Any(v =>
             NeedsCheck.ContainsNormalized(videoNorm, v) || NeedsCheck.ContainsNormalized(channelNorm, v));
 
-        if (!artistSeen)
+        if (!seen)
         {
-            _logger.Debug("Reel: gate: reject (artist: \"{0}\" not in title or channel) — title \"{1}\", channel \"{2}\"",
-                string.Join("/", artistNorms.Distinct()), details.Title, details.Channel);
+            _logger.Debug("Reel: gate: reject (artist: \"{0}\" not in title or channel)",
+                string.Join("/", artistNorms.Distinct()));
             return GateDecision.Reject("artist", "artist not found in title or channel");
         }
 
-        // -- gate 3: song-title containment (wrong-song guard) ------------------
-        var songNorm = NeedsCheck.Normalize(songTitle);
+        return null;
+    }
+
+    private GateDecision CheckTitle(string songNorm, string videoNorm)
+    {
         if (songNorm.Length == 0)
         {
             _logger.Debug("Reel: gate: reject (title: song has no title)");
@@ -181,38 +170,106 @@ public sealed class MatchGate
 
         if (!NeedsCheck.ContainsNormalized(videoNorm, songNorm))
         {
-            _logger.Debug("Reel: gate: reject (title: song title not in video title) — looking for \"{0}\" in \"{1}\"",
-                songNorm, videoNorm);
+            _logger.Debug("Reel: gate: reject (title: \"{0}\" not in video title \"{1}\")", songNorm, videoNorm);
             return GateDecision.Reject("title", $"song title \"{songNorm}\" not in video title");
         }
 
-        // -- gate 4: duration (F-20) -------------------------------------------
+        return null;
+    }
+
+    private GateDecision CheckDuration(long songDurationSeconds, long videoDurationSeconds)
+    {
         if (songDurationSeconds <= 0)
         {
             _logger.Debug("Reel: gate: reject (duration: audio track has no duration)");
             return GateDecision.Reject("duration", "audio track has no duration");
         }
 
-        if (details.DurationSeconds <= 0)
+        if (videoDurationSeconds <= 0)
         {
             _logger.Debug("Reel: gate: reject (duration: video duration unknown)");
             return GateDecision.Reject("duration", "video duration unknown");
         }
 
         var tolerance = Math.Max(1, Config.DurationTolerancePercent);
-        var delta = Math.Abs(details.DurationSeconds - songDurationSeconds);
+        var delta = Math.Abs(videoDurationSeconds - songDurationSeconds);
         var pct = delta * 100.0 / songDurationSeconds;
         if (pct > tolerance)
         {
             _logger.Debug("Reel: gate: reject (duration: {0}s vs audio {1}s = {2:0.#}% > {3}%)",
-                details.DurationSeconds, songDurationSeconds, pct, tolerance);
+                videoDurationSeconds, songDurationSeconds, pct, tolerance);
             return GateDecision.Reject("duration",
-                $"video {details.DurationSeconds}s vs audio {songDurationSeconds}s = {pct:0.#}% > {tolerance}%",
-                details.DurationSeconds);
+                $"video {videoDurationSeconds}s vs audio {songDurationSeconds}s = {pct:0.#}% > {tolerance}%",
+                videoDurationSeconds);
         }
 
-        _logger.Debug("Reel: gate: passed for \"{0}\" ({1}s vs audio {2}s, {3:0.#}%)",
-            details.Title, details.DurationSeconds, songDurationSeconds, pct);
+        return null;
+    }
+
+    // ------------------------------------------------------------------ public API
+
+    /// <summary>
+    /// Cheap pre-check against a search result's own metadata (title + shown duration) BEFORE
+    /// fetching the player response. Runs hygiene, song-title containment and — when the result
+    /// shows a duration — the duration gate. The artist gate is intentionally not run here:
+    /// the channel name is only known from the player response.
+    /// Returns a passing decision when the candidate deserves the full <see cref="Evaluate"/>.
+    /// </summary>
+    public GateDecision PreCheck(string songTitle, long songDurationSeconds, string searchTitle, long searchDurationSeconds)
+    {
+        var videoNorm = GateNormalize(searchTitle);
+        if (videoNorm.Length == 0)
+        {
+            _logger.Debug("Reel: gate: reject (metadata: empty search title)");
+            return GateDecision.Reject("metadata", "empty search title");
+        }
+
+        var decision = CheckHygiene(videoNorm)
+                       ?? CheckTitle(NeedsCheck.Normalize(songTitle), videoNorm)
+                       ?? (searchDurationSeconds > 0
+                           ? CheckDuration(songDurationSeconds, searchDurationSeconds)
+                           : null);
+
+        return decision ?? GateDecision.Pass(searchDurationSeconds);
+    }
+
+    /// <summary>
+    /// Full gate against authoritative player metadata. <paramref name="artists"/> are the
+    /// song's artists, <paramref name="songTitle"/> the song's title, <paramref name="songDurationSeconds"/>
+    /// the audio item's runtime; <paramref name="details"/> the candidate's YouTube metadata
+    /// (null when it could not be fetched → reject, F-22).
+    /// </summary>
+    public GateDecision Evaluate(IReadOnlyList<string> artists, string songTitle, long songDurationSeconds, VideoDetails details)
+    {
+        if (details == null)
+        {
+            _logger.Debug("Reel: gate: reject (metadata: no title/duration available)");
+            return GateDecision.Reject("metadata", "no title/duration available");
+        }
+
+        var videoNorm = GateNormalize(details.Title);
+        if (videoNorm.Length == 0)
+        {
+            _logger.Debug("Reel: gate: reject (metadata: empty video title)");
+            return GateDecision.Reject("metadata", "empty video title");
+        }
+
+        var channelNorm = GateNormalize(details.Channel);
+        var songNorm = NeedsCheck.Normalize(songTitle);
+
+        var decision = CheckHygiene(videoNorm)
+                       ?? CheckArtist(videoNorm, channelNorm, artists)
+                       ?? CheckTitle(songNorm, videoNorm)
+                       ?? CheckDuration(songDurationSeconds, details.DurationSeconds);
+
+        if (decision != null)
+        {
+            // caller logs this with the artist/title/videoId (N-04)
+            return decision;
+        }
+
+        _logger.Debug("Reel: gate: passed \"{0}\" ({1}s vs audio {2}s) [{3}]",
+            details.Title, details.DurationSeconds, songDurationSeconds, details.VideoId);
         return GateDecision.Pass(details.DurationSeconds);
     }
 }
