@@ -1,134 +1,102 @@
-# Trawler
+# Reel
 
-A from-scratch Emby Server plugin that downloads YouTube trailers for movies in your library and saves
-them next to your media as `{MovieFileName}-trailer.mp4`, so Emby plays them as native
-local trailers.
+A from-scratch Emby Server plugin that finds and downloads **music videos** for songs in your
+music library, so Emby can show them on artist pages and play them like any other video.
 
-Built with an API-first, resilience-obsessed pipeline.
-Targets **net8.0** (built with the .NET 10 SDK) — your Emby 4.10.1 server is a
-self-contained .NET 8.0.31 app, so net8.0 is the correct target framework.
+Built for **net8.0** (with the .NET 10 SDK) — same runtime constraints as its sibling plugin
+Trawler (`D:\Trawler`), which it forks: Reel reuses Trawler's YouTube pipeline (InnerTube
+clients, range-cap handling, client-version config settings) wholesale and replaces the
+"exact URL from RemoteTrailers" model with a **search + confidence gate**, because music has
+no equivalent of `RemoteTrailers`.
 
-## Status: DONE (2026-10-06)
-
-| Acceptance test | Result |
-|---|---|
-| Add movie → trailer appears automatically | ✅ ~127s (90s Emby `LibraryMonitorDelaySeconds` + 30s plugin delay F-01 + ~7s download) |
-| Trailer plays natively in Emby (`LocalTrailerCount`) | ✅ 10/10 movies `LocalTrailerCount=1`; ffprobe: h264 + aac in mp4 |
-| Delete trailer + run scheduled task → re-downloads | ✅ exact byte-identical re-download |
-| Network/API failures never crash Emby | ✅ entire pipeline try/catch, silent skip + detailed logs |
-| Config page + settings via dashboard API | ✅ `GET/POST /Plugins/{id}/Configuration` |
-| Detailed logs (status codes, videoIds) | ✅ embyserver.txt, "Trawler:" prefixed |
+> **Golden rule:** never install a wrong video. Matching quality beats coverage — an
+> ambiguous match is a skip, not a gamble.
 
 ## How it works
 
 ```
-ItemAdded (Movie, EnableAutoDownload) ──delay 30s──┐
-Scheduled task "Download Missing Trailers" ────────┤
-                                                   ▼
-                                    TrailerPipeline (max 2 concurrent)
-                                       1. needs check (file + LocalTrailerIds)
-                                       2. candidate IDs: RemoteTrailers, else
-                                          InnerTube search "{Title} {Year} official trailer"
-                                       3. resolve streams, per client chain:
-                                          ANDROID (direct progressive!) → IOS → ANDROID_VR → HTML
-                                       4. ranged download to %TEMP%\Trawler\{guid}
-                                       5. if adaptive: ffmpeg merge (-c:v copy -c:a aac)
-                                          if progressive: skip merge entirely
-                                       6. move to {movie dir}\{base}-trailer.mp4
-                                       7. ILibraryMonitor report + RefreshMetadata
+Scheduled task "Download Missing Music Videos" (manual Run Now; daily 04:00 self-heal)
+        │
+        ▼
+  NeedsCheck (F-30): does a MusicVideo item / output file already satisfy (artist, title)?
+        │ satisfied → skip (zero duplicate downloads, E-08)
+        ▼
+  Candidates, in order (F-12):
+    1. IMVDb  (GET /api/v1/search/videos → /video/{id}?include=sources → YouTube id)  F-10
+    2. InnerTube search  "{Artist} {Title} official video"                            F-11
+        │
+        ▼
+  Confidence gate per candidate (F-20/21/22) — ALL gates must pass; every reject logged
+  at debug level with artist, title, videoId and reason (N-04):
+    hygiene   title matches an exclude pattern (lyric/karaoke/cover/remix*/…)      F-21
+    artist    artist name in neither the video title nor its channel              (extra)
+    title     song title not in the video title (wrong-song guard)                (extra)
+    duration  video length outside DurationTolerancePercent (default 20%) of audio F-20
+        │ reject → next candidate; nothing is ever downloaded "best effort"
+        ▼ pass
+  Resolve stream (Trawler's chain: ANDROID progressive → IOS → ANDROID_VR → HTML)   F-23
+        ▼
+  Ranged download to %TEMP%\Reel\{guid} → ffmpeg merge only if adaptive
+        ▼
+  Move cross-volume safe to {TargetFolder}\{Artist} - {Title}.mp4                   F-40/43
+        ▼
+  ILibraryMonitor report (F-41) → post-pass: wait for indexing → RefreshMetadata
+  → best-effort artist link via UpdateToRepository (F-42; self-heals on the next run)
 ```
 
-## Key discoveries (why it works when others don't)
-
-1. **ANDROID_VR is bot-blocked** on residential IPs (LOGIN_REQUIRED). The **IOS** client
-   returns direct, unciphered stream URLs.
-2. **The `ANDROID` client works** with: `clientVersion 20.10.3`, `androidSdkVersion 35`,
-   a **`userAgent` field inside `context.client`**, header `X-Goog-Api-Format-Version: 2`
-   (otherwise: HTTP 400 / "Precondition check failed").
-3. **googlevideo range cap (the big one):** adaptive (video-only/audio-only) streams reject
-   any closed range whose end exceeds a per-URL cap (~2–30 MB, always < file size) with
-   HTTP 403. Plain GETs and open-ended ranges (`bytes=0-`) are also always 403.
-   → **Progressive streams (itag 18/22, video+audio muxed) have NO cap** — full file in one
-   request. Trawler therefore prefers progressive streams: single download, no ffmpeg needed.
-4. **Trailer naming** verified against Emby 4.10.1's own `Emby.Naming.dll`:
-   `^(?:.*[._ -]+)?trailer[0-9]*([\.\]_ -][^\\/\(\)]*)?$` → `{file base}-trailer.mp4` works
-   in flat libraries (confirmed: all 10 movies linked).
-5. **`EnableRealtimeMonitor` was `false`** on the Movies library — Emby itself could not see
-   new files (no ItemAdded events, no watcher). Fixed via
-   `POST /Library/VirtualFolders/LibraryOptions` (now `true`). Without this, no plugin can
-   react to new movies until a manual library scan.
-
-## Project layout
-
-```
-src/Trawler/
-├── Trawler.csproj                     # net8.0, Emby refs from system\, embedded resources
-├── Plugin.cs                          # BasePlugin<PluginConfiguration>, pages, thumb (new GUID)
-├── thumb.jpg                          # generated original artwork
-├── Configuration/PluginConfiguration.cs
-├── EntryPoints/TrailerEntryPoint.cs   # ItemAdded + delay + per-item dedup + symmetric Dispose
-├── Services/YouTubeService.cs         # visitorData cache, InnerTube clients, stream selection, search
-├── Services/DownloadMerger.cs         # ranged chunk downloads (4MB max/range), ffmpeg merge
-├── Services/TrailerPipeline.cs        # orchestrator: needs-check → resolve → download → install
-├── Tasks/DownloadMissingTrailersTask.cs
-└── Web/configPage.html + configPage.js
-```
-
-Build — point the build at your Emby install's `system` folder (contains the
-MediaBrowser.*.dll reference assemblies), either via property or environment variable:
-
-```
-dotnet build src/Trawler/Trawler.csproj -c Release -p:EmbySystemPath="C:\Path\To\Emby-Server\system"
-# or: setx EMBY_SYSTEM_PATH "C:\Path\To\Emby-Server\system"
-```
-
-Deploy: copy `bin\Release\Trawler.dll` into your Emby server's `programdata\plugins\`
-folder and restart Emby.
-
-Plugin GUID: `910C9CE1-C355-48FA-93D5-411EE319D392` · Config XML: `plugins/configurations/Trawler.xml`
-
-## Configuration (dashboard → Plugins → Trawler)
+## Settings (dashboard → Plugins → Reel)
 
 | Setting | Default | Notes |
 |---|---|---|
-| EnableAutoDownload | true | reacts to ItemAdded |
-| TriggerDelaySeconds | 30 | wait for metadata providers (F-01) |
-| MaxVideoHeight | 0 | 0 = best available |
-| EnableYouTubeSearchFallback | true | InnerTube search when RemoteTrailers empty |
-| MaxSearchResults | 3 | search candidates |
-| FfmpegPathOverride | (empty) | falls back to Emby's bundled ffmpeg |
-| LastRunSummary | | written by the scheduled task |
+| EnableScheduledScan | on | master switch for the task (F-50) |
+| MaxVideosPerRun | 100 | caps installs per run, to the item (F-03) |
+| TargetFolder | `E:\Emby Server\Music Videos` | must be a "Music videos" library folder (F-52) |
+| DurationTolerancePercent | 20 | ± video-vs-audio duration gate (F-20) |
+| ExcludeTitlePatterns | lyric, lyrics, karaoke, cover, reaction, remix*, visualizer, topic, interview, behind the scenes, making of, shorts | newline/comma separated; trailing `*` = prefix wildcard (F-21) |
+| IMVDb app key | empty | empty = search-only (their API requires a key — free at [imvdb.com/developers/apps](https://imvdb.com/developers/apps)) (F-55) |
+| MaxSearchResults | 5 | search candidates evaluated per song |
+| ANDROID / IOS client versions, PreferIosClient | as Trawler | YouTube-proofing — bump without a rebuild (F-56) |
+| LastRunSummary | | written by every task run (F-57) |
 
-The old trailer plugin was removed from the plugins folder (it reacted to the same events).
+**IMVDb attribution:** video data © [IMVDb](https://imvdb.com) (their API does not require
+attribution, but Reel credits them here and on the config page, F-13).
 
-## Test tools
+## Build & deploy
 
-`tools/` contains the throwaway diagnostic harnesses used to crack YouTube behavior
-(h2test = HTTP/1 vs h2 range tester; test-*.ps1 = InnerTube client/range experiments).
+```powershell
+$env:EMBY_SYSTEM_PATH = "C:\Users\aaron\AppData\Roaming\emby-server\system"   # or -p:EmbySystemPath=...
+dotnet build src\Reel\Reel.csproj -c Release
+Copy-Item src\Reel\bin\Release\Reel.dll "$env:APPDATA\emby-server\programdata\plugins\" -Force
+powershell -File tools\restart-emby.ps1        # clean restart, verifies single instance on :8096
+```
 
-## Deployments
+Single DLL, no NuGet packages beyond the framework (N-01); thumb + config page are embedded.
 
-| Server | Emby | Result |
-|---|---|---|
-| Test server | 4.10.1.0 (.NET 8) | ✅ deployed, 10/10 movies |
-| Production server | 4.10.1.0 (.NET 8) | ✅ first full run **900 movies → 775 downloaded / 1 skipped / 124 not found** in 40 min, 0 errors, 10/10 linking spot-check |
+## Operational profile (inherited from Trawler)
 
-First-run failure anatomy (all graceful, all retried by the daily 04:00 trigger):
-30 movies had no usable YouTube URL anywhere (RemoteTrailers empty + search empty);
-94 had candidates that never resolved (region-blocked/ciphered-only videos — per-videoId in the log);
-4 transient stream-download failures; 0 crashes, 0 error-level logs.
+- Silent on failure: the whole per-song pipeline is wrapped; Emby's task loop never sees an exception.
+- Temp files local (`%TEMP%\Reel\{guid}`), deleted in `finally`; stale dirs (>1 h) swept next run (E-07).
+- Bounded concurrency: max 2 simultaneous downloads (static `SemaphoreSlim`), plus per-song dedup (E-06).
+- 429/503 backoff (2 s, 5 s), one download retry then skip (E-04/E-05).
+- All logs prefixed `Reel:` with artist/title/videoId/reject-reason; gate decisions at debug level (N-04).
 
-Deployment steps (reusable):
-1. Copy `Trawler.dll` into your Emby server's `programdata\plugins\` folder
-   (plugin DLLs are replaceable even while the server runs — .NET shares delete handles)
-2. `POST /System/Restart` (Emby relaunches itself) — verify via `/Plugins` + `programdata\logs\embyserver.txt`
-3. Ensure the Movies library has `EnableRealtimeMonitor: true` (`GET /Library/VirtualFolders`,
-   fix via `POST /Library/VirtualFolders/LibraryOptions` with `{Name, Guid, Id, ItemId, LibraryOptions}` —
-   note the four identity fields are required or you get "Unrecognized Guid format")
-4. Run `Download Missing Trailers` once; daily 04:00 trigger is the safety net after that.
+## Linking music videos to artist pages (F-42)
 
-YouTube-proofing on a live server: if downloads start failing, the log names the failing client
-(`Trawler: InnerTube ANDROID player request failed ... HTTP 400`). Bump
-`AndroidClientVersion` / `IosClientVersion` on the config page (or check `PreferIosClient`)
-and restart — no rebuild needed.
+Emby indexes new files with a 90 s `LibraryMonitorDelaySeconds` debounce, so Reel links
+artists in a task post-pass (waits up to ~160 s for indexing) and again in a self-heal pass
+at the start of the next run: it resolves the song's artist names to library Artist items and
+persists `Artists` + `ArtistItems` via `BaseItem.UpdateToRepository` (verified against
+4.10.1 with `tools/EmbyLinkProbe`). If a link ever fails, the log names the item — link it
+manually from the item's edit page; the next run retries automatically.
 
+## Tools
+
+- `tools/make-thumb.ps1` — regenerates the embedded plugin thumbnail.
+- `tools/restart-emby.ps1` — clean Emby restart (no orphaned trays, no port races).
+- `tools/EmbyLinkProbe` — reflects the Emby API surface (used to verify the F-42 link path).
+- `tools/test-*.ps1`, `tools/h2test` — Trawler's InnerTube/range-cap research harness (inherited).
+
+## Requirements
+
+See [REQUIREMENTS.md](REQUIREMENTS.md) (the spec this plugin implements: F/E/N IDs are
+referenced throughout this document and the code).
