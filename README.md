@@ -154,3 +154,7 @@ the listener and next run retry automatically.
 
 See [REQUIREMENTS.md](REQUIREMENTS.md) (the spec this plugin implements: F/E/N IDs are
 referenced throughout this document and the code).
+
+## License
+
+MIT — see [LICENSE](LICENSE).
