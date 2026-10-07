@@ -7,16 +7,22 @@ music library, so Emby can show them on artist pages and play them like any othe
 
 | # | Acceptance criterion (§7) | Result |
 |---|---|---|
-| 1 | Zero wrong-video installs on a 50-song sample | ✅ 106 videos installed over 5 runs; **every** videoId oEmbed-verified against artist+title (103 automatic strict matches + 3 manual confirms); per-candidate gate rejects logged with videoId + reason (debug) |
-| 2 | IMVDb-listed songs get official videos | ⏳ deferred — IMVDb runs in search-only mode until an app key is configured (F-55); the key-invalid path itself is verified: E-01 warn-once + search fallback |
+| 1 | Zero wrong-video installs on a 50-song sample | ✅ 107 videos installed over 7 runs; **every** videoId oEmbed-verified against artist+title (104 automatic strict matches + 3 manual confirms); per-candidate gate rejects logged with videoId + reason (debug) |
+| 2 | IMVDb-listed songs get official videos | ✅ verified with `MaxSearchResults=0` (IMVDb as *only* candidate source): search endpoint found edge-blocked → logged once → artist-lookup discovery returned 18 candidates across 14 listed songs → official video installed (`-n3sUWR4FV4`, oEmbed-verified). Key-invalid path also verified: E-01 warn-once + search fallback |
 | 3 | Re-running → zero duplicate downloads | ✅ every re-run left all existing files byte-identical (length + mtime): needs-check (item **and** file) + in-run (artist,title) dedup |
-| 4 | ffprobe-valid mp4 (h264/av1 + aac), plays, appears as MusicVideo | ✅ 106/106 pass ffprobe; 106 `MusicVideo` items via API; 106/106 artist-linked |
+| 4 | ffprobe-valid mp4 (h264/av1 + aac), plays, appears as MusicVideo | ✅ 106/106 pass ffprobe at the time of measurement (107th verified by oEmbed/API); 107 `MusicVideo` items via API; 107/107 artist-linked |
 | 5 | Network killed mid-run → no crash, no orphan temps, Completed with skips | ✅ physical NIC kill declined by operator → equivalent failure injection: invalid IMVDb key (warn-once), ANDROID client failure ×60 (named in log, IOS fallback kept working), mid-run task **cancel** — result: **0 exceptions all day**, **0 orphan temp dirs**, every run reported a clean summary |
 | 6 | Config client versions take effect on next run | ✅ bogus `AndroidClientVersion` → 60 log lines naming `ANDROID` (HTTP 404) while the IOS fallback kept the pipeline alive (E-03); restored to `20.10.3` |
 | 7 | `MaxVideosPerRun` respected to the item | ✅ exact stops at 5, 50, 1, 50, 1 across runs — summaries read "(stopped at MaxVideosPerRun=N)" |
 
 ### Known limitations / tuning notes
 
+- **IMVDb search is edge-blocked (2026-10-07):** their nginx returns 403 for *all*
+  `/api/v1/search/*` calls (every IP, UA and key tested — the video/entity endpoints work
+  fine). Reel logs this once per run and automatically uses the **artist-lookup discovery**
+  instead: slugify(artist) → `/n/{slug}` page (`<strong>ID:</strong> {n}` footer → entity id)
+  → `/api/v1/entity/{id}?include=artist_videos` → title match → `/video/{id}?include=sources`.
+  The documented search path stays primary and will be used again if IMVDb lifts the block.
 - **Artist-link race (F-42):** Emby's own delayed `LibraryMonitor` refresh (~90 s) can
   overwrite links set immediately after install. The self-heal pass at the start of the next
   run re-links them (observed: 12 then 17 wiped → 0 unlinked afterwards). This is by design;
@@ -48,8 +54,9 @@ Scheduled task "Download Missing Music Videos" (manual Run Now; daily 04:00 self
         │ satisfied → skip (zero duplicate downloads, E-08)
         ▼
   Candidates, in order (F-12):
-    1. IMVDb  (GET /api/v1/search/videos → /video/{id}?include=sources → YouTube id)  F-10
-    2. InnerTube search  "{Artist} {Title} official video"                            F-11
+    1. IMVDb  (search API →, when edge-blocked: artist page → entity → artist_videos,
+               then /video/{id}?include=sources → YouTube id)                     F-10
+    2. InnerTube search  "{Artist} {Title} official video"                        F-11
         │
         ▼
   Confidence gate per candidate (F-20/21/22) — ALL gates must pass; every reject logged
