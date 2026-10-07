@@ -1,15 +1,19 @@
 define(['baseView', 'loading', 'emby-input', 'emby-button', 'emby-checkbox', 'emby-scroller'], function (BaseView, loading) {
     'use strict';
 
-    var PLUGIN_ID = '910C9CE1-C355-48FA-93D5-411EE319D392';
+    // Reel plugin id — must match Plugin.Id in Plugin.cs
+    var PLUGIN_ID = 'B910B3A1-A0EE-4C87-9695-AFD021DE678E';
 
     function loadPage(page, config) {
 
-        page.querySelector('#EnableAutoDownload').checked = config.EnableAutoDownload !== false;
-        page.querySelector('#TriggerDelaySeconds').value = config.TriggerDelaySeconds != null ? config.TriggerDelaySeconds : 30;
+        page.querySelector('#EnableScheduledScan').checked = config.EnableScheduledScan !== false;
+        page.querySelector('#MaxVideosPerRun').value = config.MaxVideosPerRun || 100;
+        page.querySelector('#TargetFolder').value = config.TargetFolder || '';
+        page.querySelector('#DurationTolerancePercent').value = config.DurationTolerancePercent != null ? config.DurationTolerancePercent : 20;
+        page.querySelector('#ExcludeTitlePatterns').value = config.ExcludeTitlePatterns || '';
+        page.querySelector('#ImvdbApiKey').value = config.ImvdbApiKey || '';
+        page.querySelector('#MaxSearchResults').value = config.MaxSearchResults || 5;
         page.querySelector('#MaxVideoHeight').value = config.MaxVideoHeight || 0;
-        page.querySelector('#EnableYouTubeSearchFallback').checked = config.EnableYouTubeSearchFallback !== false;
-        page.querySelector('#MaxSearchResults').value = config.MaxSearchResults || 3;
         page.querySelector('#FfmpegPathOverride').value = config.FfmpegPathOverride || '';
         page.querySelector('#AndroidClientVersion').value = config.AndroidClientVersion || '20.10.3';
         page.querySelector('#IosClientVersion').value = config.IosClientVersion || '20.10.4';
@@ -23,17 +27,27 @@ define(['baseView', 'loading', 'emby-input', 'emby-button', 'emby-checkbox', 'em
 
         e.preventDefault();
 
-        loading.show();
-
         var form = this;
+        var targetFolder = form.querySelector('#TargetFolder').value.trim();
+
+        if (!targetFolder) {
+            Dashboard.alert('Target folder is required: point it at your Music Videos library folder.');
+            return false;
+        }
+
+        loading.show();
 
         ApiClient.getPluginConfiguration(PLUGIN_ID).then(function (config) {
 
-            config.EnableAutoDownload = form.querySelector('#EnableAutoDownload').checked;
-            config.TriggerDelaySeconds = parseInt(form.querySelector('#TriggerDelaySeconds').value, 10) || 0;
+            config.EnableScheduledScan = form.querySelector('#EnableScheduledScan').checked;
+            config.MaxVideosPerRun = parseInt(form.querySelector('#MaxVideosPerRun').value, 10) || 100;
+            config.TargetFolder = targetFolder;
+            config.DurationTolerancePercent = parseInt(form.querySelector('#DurationTolerancePercent').value, 10);
+            if (isNaN(config.DurationTolerancePercent)) { config.DurationTolerancePercent = 20; }
+            config.ExcludeTitlePatterns = form.querySelector('#ExcludeTitlePatterns').value;
+            config.ImvdbApiKey = form.querySelector('#ImvdbApiKey').value.trim();
+            config.MaxSearchResults = parseInt(form.querySelector('#MaxSearchResults').value, 10) || 5;
             config.MaxVideoHeight = parseInt(form.querySelector('#MaxVideoHeight').value, 10) || 0;
-            config.EnableYouTubeSearchFallback = form.querySelector('#EnableYouTubeSearchFallback').checked;
-            config.MaxSearchResults = parseInt(form.querySelector('#MaxSearchResults').value, 10) || 3;
             config.FfmpegPathOverride = form.querySelector('#FfmpegPathOverride').value;
             config.AndroidClientVersion = form.querySelector('#AndroidClientVersion').value;
             config.IosClientVersion = form.querySelector('#IosClientVersion').value;

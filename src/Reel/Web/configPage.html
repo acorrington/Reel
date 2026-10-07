@@ -3,32 +3,49 @@
 
         <form class="auto-center" style="width:100%;max-width:42em;">
             <h2 class="sectionTitle">Reel</h2>
-            <p class="fieldDescription">Downloads YouTube trailers for your movies and saves them next to your media as <em>{MovieName}-trailer.mp4</em>, so Emby plays them as local trailers.</p>
+            <p class="fieldDescription">Finds and downloads music videos for songs in your music library and installs them into your Music Videos library folder as <em>{Artist} - {Title}.mp4</em>. Ambiguous matches are skipped — never installed.</p>
 
             <div class="checkboxContainer">
                 <label>
-                    <input is="emby-checkbox" type="checkbox" id="EnableAutoDownload" />
-                    <span>Download trailers automatically when a movie is added</span>
+                    <input is="emby-checkbox" type="checkbox" id="EnableScheduledScan" />
+                    <span>Allow the scheduled task "Download Missing Music Videos" to run automatically</span>
                 </label>
             </div>
 
             <div class="inputContainer">
-                <input is="emby-input" type="number" id="TriggerDelaySeconds" min="0" label="Delay before download, seconds (lets metadata finish first):" />
+                <input is="emby-input" type="number" id="MaxVideosPerRun" min="1" label="Maximum music videos to install per run:" />
             </div>
 
             <div class="inputContainer">
-                <input is="emby-input" type="number" id="MaxVideoHeight" min="0" label="Maximum trailer height in pixels (0 = best available):" />
+                <input is="emby-input" type="text" id="TargetFolder" label="Target folder (Music Videos library path, required):" />
             </div>
 
-            <div class="checkboxContainer">
-                <label>
-                    <input is="emby-checkbox" type="checkbox" id="EnableYouTubeSearchFallback" />
-                    <span>Search YouTube for a trailer when a movie has no remote trailer URLs</span>
-                </label>
+            <h2 class="sectionTitle">Match confidence</h2>
+            <p class="fieldDescription">A candidate video must pass every enabled gate. On any doubt it is skipped and the reason is logged with the videoId.</p>
+
+            <div class="inputContainer">
+                <input is="emby-input" type="number" id="DurationTolerancePercent" min="1" max="200" label="Duration tolerance vs. audio track (%):" />
             </div>
 
             <div class="inputContainer">
-                <input is="emby-input" type="number" id="MaxSearchResults" min="1" max="10" label="Maximum search candidates to try:" />
+                <label class="inputFieldLabel" for="ExcludeTitlePatterns">Exclude title patterns (one per line; trailing * = wildcard):</label>
+                <textarea id="ExcludeTitlePatterns" rows="7" style="width:100%;display:block;"></textarea>
+                <div class="fieldDescription">Candidates whose YouTube title matches any pattern (e.g. <em>lyric</em>, <em>karaoke</em>, <em>cover</em>, <em>remix*</em>) are rejected.</div>
+            </div>
+
+            <h2 class="sectionTitle">Discovery</h2>
+
+            <div class="inputContainer">
+                <input is="emby-input" type="text" id="ImvdbApiKey" label="IMVDb app key (optional — search-only when empty):" />
+                <div class="fieldDescription">Reel asks IMVDb first for official music videos, then falls back to YouTube search. Get a free key at imvdb.com/developers/apps. Video data © IMVDb (imvdb.com).</div>
+            </div>
+
+            <div class="inputContainer">
+                <input is="emby-input" type="number" id="MaxSearchResults" min="1" max="10" label="Maximum YouTube search candidates to evaluate per song:" />
+            </div>
+
+            <div class="inputContainer">
+                <input is="emby-input" type="number" id="MaxVideoHeight" min="0" label="Maximum video height in pixels (0 = best available):" />
             </div>
 
             <div class="inputContainer">
