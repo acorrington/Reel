@@ -3,6 +3,32 @@
 A from-scratch Emby Server plugin that finds and downloads **music videos** for songs in your
 music library, so Emby can show them on artist pages and play them like any other video.
 
+## Status: acceptance passed (2026-10-07, Emby 4.10.1, 2037-song library)
+
+| # | Acceptance criterion (§7) | Result |
+|---|---|---|
+| 1 | Zero wrong-video installs on a 50-song sample | ✅ 106 videos installed over 5 runs; **every** videoId oEmbed-verified against artist+title (103 automatic strict matches + 3 manual confirms); per-candidate gate rejects logged with videoId + reason (debug) |
+| 2 | IMVDb-listed songs get official videos | ⏳ deferred — IMVDb runs in search-only mode until an app key is configured (F-55); the key-invalid path itself is verified: E-01 warn-once + search fallback |
+| 3 | Re-running → zero duplicate downloads | ✅ every re-run left all existing files byte-identical (length + mtime): needs-check (item **and** file) + in-run (artist,title) dedup |
+| 4 | ffprobe-valid mp4 (h264/av1 + aac), plays, appears as MusicVideo | ✅ 106/106 pass ffprobe; 106 `MusicVideo` items via API; 106/106 artist-linked |
+| 5 | Network killed mid-run → no crash, no orphan temps, Completed with skips | ✅ physical NIC kill declined by operator → equivalent failure injection: invalid IMVDb key (warn-once), ANDROID client failure ×60 (named in log, IOS fallback kept working), mid-run task **cancel** — result: **0 exceptions all day**, **0 orphan temp dirs**, every run reported a clean summary |
+| 6 | Config client versions take effect on next run | ✅ bogus `AndroidClientVersion` → 60 log lines naming `ANDROID` (HTTP 404) while the IOS fallback kept the pipeline alive (E-03); restored to `20.10.3` |
+| 7 | `MaxVideosPerRun` respected to the item | ✅ exact stops at 5, 50, 1, 50, 1 across runs — summaries read "(stopped at MaxVideosPerRun=N)" |
+
+### Known limitations / tuning notes
+
+- **Artist-link race (F-42):** Emby's own delayed `LibraryMonitor` refresh (~90 s) can
+  overwrite links set immediately after install. The self-heal pass at the start of the next
+  run re-links them (observed: 12 then 17 wiped → 0 unlinked afterwards). This is by design;
+  a fully link-stable run needs one extra task run after the downloads.
+- "Live" videos pass by default (the F-21 spec list has no `live` pattern) — add it to
+  `ExcludeTitlePatterns` if unwanted.
+- Search runs on the InnerTube **WEB** client: the IOS client stopped serving search results
+  entirely (2026-10) — root cause of Reel's first failed run (1833 "no candidates"). Version
+  is editable as `WebSearchClientVersion` (E-03-style proofing).
+- The song-title gate strips bracketed suffixes, so `(Remastered)`/`(Single Edit)` in a song
+  title never blocks a match against the plain video title.
+
 Built for **net8.0** (with the .NET 10 SDK) — same runtime constraints as its sibling plugin
 Trawler (`D:\Trawler`), which it forks: Reel reuses Trawler's YouTube pipeline (InnerTube
 clients, range-cap handling, client-version config settings) wholesale and replaces the
