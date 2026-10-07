@@ -32,8 +32,21 @@ music library, so Emby can show them on artist pages and play them like any othe
 - Search runs on the InnerTube **WEB** client: the IOS client stopped serving search results
   entirely (2026-10) — root cause of Reel's first failed run (1833 "no candidates"). Version
   is editable as `WebSearchClientVersion` (E-03-style proofing).
-- The song-title gate strips bracketed suffixes, so `(Remastered)`/`(Single Edit)` in a song
-  title never blocks a match against the plain video title.
+- The song-title gate strips bracketed suffixes **and** trailing qualifier tails (`- From X
+  Soundtrack`, `- Single Version`, `- 2015 Remaster`, `- Radio Edit`, `- Promo 7 Edit`,
+  `- 7 Version`), so those variants never block a match against the plain video title — and
+  all variants of one song share a single installed video (E-08).
+- **Album-art uploads are rejected by pixels, not titles (F-24):** YouTube is full of
+  "static album cover + audio" videos whose titles look perfectly legitimate (e.g. the Bee
+  Gees promo incident, 2026-10-07: `Stayin' Alive (Promo 12" Version) (Remastered)` by
+  "Music Jukebox" — 6 fps, 362×360, one still image). After download, Reel samples 7 frames
+  with ffmpeg; a max pairwise frame difference below `StaticImageDiffThreshold` (default
+  10.0) means album art → reject, next candidate. Calibrated on the real library: the bad
+  promo video measured **0.17**, three real music videos measured **41.9 / 50.8 / 57.0**.
+- IMVDb's official entries skip the duration gate (F-20b, on by default): the official
+  video for "Stayin' Alive" is ~4:45 while the promo 12" audio runs ~6:56 — the old strict
+  gate rejected the *right* video and let the album-art one win on duration. All other
+  gates (hygiene/artist/title) still apply to IMVDb candidates.
 
 Built for **net8.0** (with the .NET 10 SDK) — same runtime constraints as its sibling plugin
 Trawler (`D:\Trawler`), which it forks: Reel reuses Trawler's YouTube pipeline (InnerTube
@@ -61,15 +74,19 @@ Scheduled task "Download Missing Music Videos" (manual Run Now; daily 04:00 self
         ▼
   Confidence gate per candidate (F-20/21/22) — ALL gates must pass; every reject logged
   at debug level with artist, title, videoId and reason (N-04):
-    hygiene   title matches an exclude pattern (lyric/karaoke/cover/remix*/…)      F-21
+    hygiene   title matches an exclude pattern (lyric/karaoke/cover/album art/…)      F-21
     artist    artist name in neither the video title nor its channel              (extra)
     title     song title not in the video title (wrong-song guard)                (extra)
     duration  video length outside DurationTolerancePercent (default 20%) of audio F-20
+              — skipped for IMVDb official entries (ImvdbSkipsDurationGate)        F-20b
         │ reject → next candidate; nothing is ever downloaded "best effort"
         ▼ pass
   Resolve stream (Trawler's chain: ANDROID progressive → IOS → ANDROID_VR → HTML)   F-23
         ▼
   Ranged download to %TEMP%\Reel\{guid} → ffmpeg merge only if adaptive
+        ▼
+  Content gate: sample 7 frames — static image (album art + audio) → reject,        F-24
+    next candidate (calibrated: album-art ≈0.2 max frame diff, real MVs 40+)
         ▼
   Move cross-volume safe to {TargetFolder}\{Artist} - {Title}.mp4                   F-40/43
         ▼
@@ -85,7 +102,10 @@ Scheduled task "Download Missing Music Videos" (manual Run Now; daily 04:00 self
 | MaxVideosPerRun | 100 | caps installs per run, to the item (F-03) |
 | TargetFolder | `E:\Emby Server\Music Videos` | must be a "Music videos" library folder (F-52) |
 | DurationTolerancePercent | 20 | ± video-vs-audio duration gate (F-20) |
-| ExcludeTitlePatterns | lyric, lyrics, karaoke, cover, reaction, remix*, visualizer, topic, interview, behind the scenes, making of, shorts | newline/comma separated; trailing `*` = prefix wildcard (F-21) |
+| ImvdbSkipsDurationGate | on | IMVDb official entries skip the duration gate — the official video still counts when your audio is a promo/12"/remix edit (F-20b) |
+| ExcludeTitlePatterns | lyric, lyrics, karaoke, cover, reaction, remix*, visualizer, topic, interview, behind the scenes, making of, shorts, album art, official audio, audio only, with picture, slideshow, static image | newline/comma separated; trailing `*` = prefix wildcard (F-21) |
+| RejectStaticImageVideos | on | frame-samples the download before install; album-art/audio uploads are rejected (F-24) |
+| StaticImageDiffThreshold | 10.0 | static-image sensitivity, 0–255 frame diff; lower = stricter (F-24) |
 | IMVDb app key | empty | empty = search-only (their API requires a key — free at [imvdb.com/developers/apps](https://imvdb.com/developers/apps)) (F-55) |
 | MaxSearchResults | 5 | search candidates evaluated per song |
 | ANDROID / IOS client versions, PreferIosClient | as Trawler | YouTube-proofing — bump without a rebuild (F-56) |

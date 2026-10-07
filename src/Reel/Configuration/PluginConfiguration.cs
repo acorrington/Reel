@@ -37,7 +37,25 @@ public class PluginConfiguration : BasePluginConfiguration
     /// <summary>Newline/comma separated title patterns that disqualify a candidate (F-21).
     /// A trailing * makes the pattern a prefix wildcard (e.g. remix* matches remixes).</summary>
     public string ExcludeTitlePatterns { get; set; } =
-        "lyric\nlyrics\nkaraoke\ncover\nreaction\nremix*\nvisualizer\ntopic\ninterview\nbehind the scenes\nmaking of\nshorts";
+        "lyric\nlyrics\nkaraoke\ncover\nreaction\nremix*\nvisualizer\ntopic\ninterview\nbehind the scenes\nmaking of\nshorts\nalbum art\nofficial audio\naudio only\nwith picture\nslideshow\nstatic image";
+
+    // ------------------------------------------------------------------
+    // Content gate (F-24) + official-entry trust (F-20b)
+    // ------------------------------------------------------------------
+
+    /// <summary>Reject downloaded videos that are visually static — album-art + audio uploads
+    /// (F-24). Frames are sampled with ffmpeg after download and before install.</summary>
+    public bool RejectStaticImageVideos { get; set; } = true;
+
+    /// <summary>Static-image sensitivity (F-24): max pairwise frame difference (0-255) below
+    /// which a video counts as a static image. Lower = stricter. Calibrated 2026-10-07:
+    /// album-art uploads measure ~0.2, real music videos ~40+.</summary>
+    public double StaticImageDiffThreshold { get; set; } = 10.0;
+
+    /// <summary>Skip the duration gate for IMVDb candidates (F-20b): IMVDb's entry is the
+    /// official music video for the song, which may still be the right video when the library
+    /// audio is a promo/12"/remix edit of a different length.</summary>
+    public bool ImvdbSkipsDurationGate { get; set; } = true;
 
     // ------------------------------------------------------------------
     // Discovery (F-10 / F-11 / F-55)

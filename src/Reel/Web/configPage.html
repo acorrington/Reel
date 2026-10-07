@@ -27,10 +27,29 @@
                 <input is="emby-input" type="number" id="DurationTolerancePercent" min="1" max="200" label="Duration tolerance vs. audio track (%):" />
             </div>
 
+            <div class="checkboxContainer">
+                <label>
+                    <input is="emby-checkbox" type="checkbox" id="ImvdbSkipsDurationGate" />
+                    <span>Trust IMVDb official videos: skip the duration gate for IMVDb candidates (the official video still counts when your audio is a promo/12"/remix edit)</span>
+                </label>
+            </div>
+
             <div class="inputContainer">
                 <label class="inputFieldLabel" for="ExcludeTitlePatterns">Exclude title patterns (one per line; trailing * = wildcard):</label>
                 <textarea id="ExcludeTitlePatterns" rows="7" style="width:100%;display:block;"></textarea>
                 <div class="fieldDescription">Candidates whose YouTube title matches any pattern (e.g. <em>lyric</em>, <em>karaoke</em>, <em>cover</em>, <em>remix*</em>) are rejected.</div>
+            </div>
+
+            <div class="checkboxContainer">
+                <label>
+                    <input is="emby-checkbox" type="checkbox" id="RejectStaticImageVideos" />
+                    <span>Reject static-image uploads (album art + audio) — samples frames after download, before install</span>
+                </label>
+            </div>
+
+            <div class="inputContainer">
+                <input is="emby-input" type="number" id="StaticImageDiffThreshold" min="1" max="100" step="0.5" label="Static-image sensitivity (max frame difference 0–255; lower = stricter):" />
+                <div class="fieldDescription">Calibrated on your library: album-art uploads measure ~0.2, real music videos 40+. Default 10 leaves a wide safety margin.</div>
             </div>
 
             <h2 class="sectionTitle">Discovery</h2>

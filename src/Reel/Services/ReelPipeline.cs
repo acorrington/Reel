@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Threading;
@@ -161,16 +162,18 @@ public sealed class ReelPipeline
                     }
                 }
 
-                // Authoritative metadata + full confidence gate.
+                // Authoritative metadata + full confidence gate. IMVDb candidates carry
+                // F-20b trust: their duration gate is skipped (official entry for this song).
                 var details = await _youtube.GetVideoDetailsAsync(candidate.VideoId, ct).ConfigureAwait(false);
-                var decision = _matchGate.Evaluate(artistList, title, songSeconds, details);
+                var decision = _matchGate.Evaluate(artistList, title, songSeconds, details,
+                    officialSource: candidate.Source == "imvdb");
                 if (!decision.Passed)
                 {
                     LogReject(artistList, title, candidate, decision);
                     continue;
                 }
 
-                var result = await TryDownloadInstallAsync(primaryArtist, title, savePath, candidate, config, ct).ConfigureAwait(false);
+                var result = await TryDownloadInstallAsync(primaryArtist, title, savePath, candidate, decision, config, ct).ConfigureAwait(false);
                 if (result != null)
                 {
                     return result;
@@ -244,13 +247,14 @@ public sealed class ReelPipeline
 
     // ------------------------------------------------------------------ download + install + link (F-23, F-40..F-43)
 
-    /// <summary>Resolve → download → merge → install → refresh → link one gated candidate.
-    /// Returns null to try the next candidate, Ok/Fail to finish the song.</summary>
+    /// <summary>Resolve → download → merge → content gate → install → refresh → link one gated
+    /// candidate. Returns null to try the next candidate, Ok/Fail to finish the song.</summary>
     private async Task<PipelineResult> TryDownloadInstallAsync(
         string primaryArtist,
         string title,
         string savePath,
         Candidate candidate,
+        GateDecision decision,
         PluginConfiguration config,
         CancellationToken ct)
     {
@@ -320,6 +324,33 @@ public sealed class ReelPipeline
                 finalTempFile = mergedFile;
             }
 
+            // --- content gate (F-24): reject album-art / static-image uploads AFTER download
+            // but BEFORE install — the title/duration gates can't see them, but the pixels can.
+            // Calibrated 2026-10-07: album-art uploads measure ~0.2 max frame diff, real music
+            // videos 40+; threshold 10.0 leaves a wide margin. Probe failure = not static
+            // (never block an install because ffmpeg hiccupped). ---
+            if (config.RejectStaticImageVideos)
+            {
+                var ffmpegPath = ResolveFfmpegPath(config);
+                if (ffmpegPath == null)
+                {
+                    _logger.Debug("Reel: content gate skipped for {0} — ffmpeg not available", videoId);
+                }
+                else
+                {
+                    var staticScore = await MeasureStaticScoreAsync(ffmpegPath, finalTempFile, decision.VideoDurationSeconds, ct).ConfigureAwait(false);
+                    if (staticScore.HasValue && staticScore.Value < config.StaticImageDiffThreshold)
+                    {
+                        _logger.Warn("Reel: {0} – {1}: reject {2} (content: static image / album-art video — max frame diff {3:0.00} < {4:0.00})",
+                            primaryArtist, title, videoId, staticScore.Value, config.StaticImageDiffThreshold);
+                        return null;
+                    }
+
+                    _logger.Debug("Reel: content gate passed for {0} (max frame diff {1})", videoId,
+                        staticScore.HasValue ? staticScore.Value.ToString("0.00") : "unavailable");
+                }
+            }
+
             // --- install (F-43: cross-volume safe move; F-41: monitor report) ---
             _libraryMonitor.ReportFileSystemChangeBeginning(savePath);
             try
@@ -382,9 +413,148 @@ public sealed class ReelPipeline
         }
     }
 
-    /// <summary>E-05: one retry, then give up on this candidate.</summary>
-    private async Task<bool> DownloadWithRetryAsync(string url, string destination, string userAgent, CancellationToken ct)
+    // ------------------------------------------------------------------ content gate (F-24)
+
+    /// <summary>Sample points across the video for the static-image check (fractions of duration).
+    /// Seven samples catch any scene change in a real music video while an album-art upload
+    /// shows the same picture everywhere.</summary>
+    private static readonly double[] StaticSampleFractions = { 0.08, 0.22, 0.36, 0.50, 0.64, 0.78, 0.92 };
+
+    /// <summary>
+    /// F-24: extract tiny grayscale frames at fixed fractions of the duration via ffmpeg and
+    /// return the MAX pairwise mean absolute difference (0-255), or null when the probe failed
+    /// (treated as "not static" — never block an install because ffmpeg hiccupped).
+    /// Calibrated 2026-10-07 against the library: album-art upload = 0.17, real MVs = 41.9/50.8/57.0.
+    /// </summary>
+    private async Task<double?> MeasureStaticScoreAsync(string ffmpegPath, string filePath, long durationSeconds, CancellationToken ct)
     {
+        if (durationSeconds <= 0)
+        {
+            return null;
+        }
+
+        var frames = new List<byte[]>();
+        foreach (var fraction in StaticSampleFractions)
+        {
+            ct.ThrowIfCancellationRequested();
+            var seconds = (long)Math.Max(0, Math.Min(durationSeconds - 1, durationSeconds * fraction));
+            var frame = await ExtractGrayFrameAsync(ffmpegPath, filePath, seconds, ct).ConfigureAwait(false);
+            if (frame == null || frame.Length == 0)
+            {
+                return null; // incomplete sample set → indeterminate → not static
+            }
+
+            frames.Add(frame);
+        }
+
+        var maxDiff = 0.0;
+        for (var i = 0; i < frames.Count; i++)
+        {
+            for (var j = i + 1; j < frames.Count; j++)
+            {
+                var diff = MeanAbsDiff(frames[i], frames[j]);
+                if (diff > maxDiff)
+                {
+                    maxDiff = diff;
+                }
+            }
+        }
+
+        return maxDiff;
+    }
+
+    /// <summary>One frame at <paramref name="seconds"/>, downscaled to 32x18 grayscale rawvideo
+    /// (576 bytes). Null on any failure.</summary>
+    private async Task<byte[]> ExtractGrayFrameAsync(string ffmpegPath, string filePath, long seconds, CancellationToken ct)
+    {
+        var args = $"-ss {seconds} -i \"{filePath}\" -frames:v 1 -vf scale=32:18,format=gray -f rawvideo -an -";
+        try
+        {
+            var psi = new ProcessStartInfo
+            {
+                FileName = ffmpegPath,
+                Arguments = args,
+                UseShellExecute = false,
+                CreateNoWindow = true,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true
+            };
+
+            using var process = Process.Start(psi);
+            if (process == null)
+            {
+                return null;
+            }
+
+            using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            timeoutCts.CancelAfter(TimeSpan.FromSeconds(30));
+
+            var stderrTask = process.StandardError.ReadToEndAsync();
+            var stdoutStream = process.StandardOutput.BaseStream;
+            var stdoutTask = Task.Run(async () =>
+            {
+                using var buffer = new MemoryStream();
+                await stdoutStream.CopyToAsync(buffer, 8192, timeoutCts.Token).ConfigureAwait(false);
+                return buffer.ToArray();
+            }, timeoutCts.Token);
+
+            try
+            {
+                await process.WaitForExitAsync(timeoutCts.Token).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException)
+            {
+                try
+                {
+                    process.Kill(true);
+                }
+                catch
+                {
+                    // process may have exited between the check and the kill
+                }
+
+                if (ct.IsCancellationRequested)
+                {
+                    throw;
+                }
+
+                _logger.Debug("Reel: static-image probe timed out for {0}", Path.GetFileName(filePath));
+                return null;
+            }
+
+            _ = await stderrTask.ConfigureAwait(false);
+            return await stdoutTask.ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            _logger.Debug("Reel: static-image probe failed for {0}: {1}", Path.GetFileName(filePath), ex.Message);
+            return null;
+        }
+    }
+
+    private static double MeanAbsDiff(byte[] a, byte[] b)
+    {
+        var len = Math.Min(a.Length, b.Length);
+        if (len == 0)
+        {
+            return 255;
+        }
+
+        long sum = 0;
+        for (var i = 0; i < len; i++)
+        {
+            sum += Math.Abs(a[i] - b[i]);
+        }
+
+        return (double)sum / len;
+    }
+
+    /// <summary>E-05: one retry, then give up on this candidate.</summary>
+    private async Task<bool> DownloadWithRetryAsync(string url, string destination, string userAgent, CancellationToken ct)    {
         if (string.IsNullOrEmpty(url))
         {
             return false;

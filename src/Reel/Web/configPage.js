@@ -10,7 +10,10 @@ define(['baseView', 'loading', 'emby-input', 'emby-button', 'emby-checkbox', 'em
         page.querySelector('#MaxVideosPerRun').value = config.MaxVideosPerRun || 100;
         page.querySelector('#TargetFolder').value = config.TargetFolder || '';
         page.querySelector('#DurationTolerancePercent').value = config.DurationTolerancePercent != null ? config.DurationTolerancePercent : 20;
+        page.querySelector('#ImvdbSkipsDurationGate').checked = config.ImvdbSkipsDurationGate !== false;
         page.querySelector('#ExcludeTitlePatterns').value = config.ExcludeTitlePatterns || '';
+        page.querySelector('#RejectStaticImageVideos').checked = config.RejectStaticImageVideos !== false;
+        page.querySelector('#StaticImageDiffThreshold').value = config.StaticImageDiffThreshold != null ? config.StaticImageDiffThreshold : 10;
         page.querySelector('#ImvdbApiKey').value = config.ImvdbApiKey || '';
         page.querySelector('#MaxSearchResults').value = config.MaxSearchResults || 5;
         page.querySelector('#MaxVideoHeight').value = config.MaxVideoHeight || 0;
@@ -45,7 +48,11 @@ define(['baseView', 'loading', 'emby-input', 'emby-button', 'emby-checkbox', 'em
             config.TargetFolder = targetFolder;
             config.DurationTolerancePercent = parseInt(form.querySelector('#DurationTolerancePercent').value, 10);
             if (isNaN(config.DurationTolerancePercent)) { config.DurationTolerancePercent = 20; }
+            config.ImvdbSkipsDurationGate = form.querySelector('#ImvdbSkipsDurationGate').checked;
             config.ExcludeTitlePatterns = form.querySelector('#ExcludeTitlePatterns').value;
+            config.RejectStaticImageVideos = form.querySelector('#RejectStaticImageVideos').checked;
+            config.StaticImageDiffThreshold = parseFloat(form.querySelector('#StaticImageDiffThreshold').value);
+            if (isNaN(config.StaticImageDiffThreshold) || config.StaticImageDiffThreshold <= 0) { config.StaticImageDiffThreshold = 10; }
             config.ImvdbApiKey = form.querySelector('#ImvdbApiKey').value.trim();
             config.MaxSearchResults = parseInt(form.querySelector('#MaxSearchResults').value, 10) || 5;
             config.MaxVideoHeight = parseInt(form.querySelector('#MaxVideoHeight').value, 10) || 0;

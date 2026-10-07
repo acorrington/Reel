@@ -58,16 +58,18 @@ wrong song with the same title). The core requirement of this plugin is therefor
 | ID | Requirement | Priority |
 |----|-------------|----------|
 | F-20 | **Duration check**: video length must be within `DurationTolerancePercent` (default 20%) of the audio track's duration; otherwise reject | Must |
-| F-21 | **Title hygiene**: reject candidates whose titles match exclude patterns — default: `lyric`, `lyrics`, `karaoke`, `cover`, `reaction`, `remix`*, `visualizer`, `topic`, `interview`, `behind the scenes`, `making of`, `shorts` (*configurable; `remix` exclusion editable for dance libraries) | Must |
+| F-20b | **IMVDb trust**: when `ImvdbSkipsDurationGate` is on (default), the duration gate is SKIPPED for IMVDb-sourced candidates — IMVDb's entry IS the official music video for the song, and the library audio may be a promo/12"/remix edit of a different length (the official video is still the right video). All other gates still run. | Must |
+| F-21 | **Title hygiene**: reject candidates whose titles match exclude patterns — default: `lyric`, `lyrics`, `karaoke`, `cover`, `reaction`, `remix`*, `visualizer`, `topic`, `interview`, `behind the scenes`, `making of`, `shorts`, `album art`, `official audio`, `audio only`, `with picture`, `slideshow`, `static image` (*configurable; `remix` exclusion editable for dance libraries) | Must |
 | F-22 | A candidate passes only if **all** enabled gates pass; on any doubt → skip and log the reason with the videoId | Must |
 | F-23 | Prefer higher resolution progressive streams (same selection logic as Trawler: progressive > adaptive because of the googlevideo range cap) | Must |
+| F-24 | **Content check (static-image rejection)**: when `RejectStaticImageVideos` is on (default), sample frames from the downloaded file BEFORE install with ffmpeg; if the max pairwise frame difference is below `StaticImageDiffThreshold` (default 10.0), the video is an album-art/static-image upload → reject and try the next candidate (never install). Probe failure = not static (never block an install on an ffmpeg hiccup). Calibrated 2026-10-07: album-art uploads measure ~0.2, real music videos 40+. | Must |
 
 ### 3.4 Needs-check (does this song already have its video?)
 
 | ID | Requirement | Priority |
 |----|-------------|----------|
 | F-30 | Before downloading for song X, query existing MusicVideo items: consider it satisfied if an MV exists whose normalized title ≈ song title **and** shares an artist link (or artist name) | Must |
-| F-31 | Normalization: case, punctuation, `feat.`/`ft.`/`with` clauses, bracketed suffixes, `(Live)`/`(Remastered)` markers | Must |
+| F-31 | Normalization: case, punctuation, `feat.`/`ft.`/`with` clauses, bracketed suffixes, `(Live)`/`(Remastered)` markers, and trailing qualifier tails after ` - ` (`- From … Soundtrack`, `- Single Version`, `- 2015 Remaster`, `- Radio Edit`, `- Promo 7 Edit`, `- 7 Version`) | Must |
 | F-32 | A song failing F-30 counts as "missing"; already-downloaded songs are never re-fetched (file + item both checked, like Trawler's F-02) | Must |
 
 ### 3.5 Install, naming and linking
@@ -91,6 +93,9 @@ wrong song with the same title). The core requirement of this plugin is therefor
 | F-55 | ImvdbApiKey | (empty) | optional — falls back to search-only when empty |
 | F-56 | PreferIosClient / AndroidClientVersion / IosClientVersion | as Trawler | YouTube-proofing, carried over unchanged |
 | F-57 | LastRunSummary | | written by the task (same as Trawler) |
+| F-58 | RejectStaticImageVideos | true | F-24 content gate |
+| F-59 | StaticImageDiffThreshold | 10.0 | F-24 sensitivity (0-255 frame diff; lower = stricter) |
+| F-60 | ImvdbSkipsDurationGate | true | F-20b IMVDb duration-gate trust |
 
 ---
 
@@ -141,6 +146,7 @@ player response `lengthSeconds` (no extra download needed) or IMVDB metadata whe
 | E-06 | Two runs overlap | single global `SemaphoreSlim` + per-song dedup (inherited pattern) |
 | E-07 | Shutdown mid-run | token propagated from Emby; partial files removed next run (scan temp dir age > 1 h) |
 | E-08 | Same song under multiple albums | needs-check keys on (artist, title), not album — download once |
+| E-09 | Static-image probe fails (ffmpeg missing/timeout) | treat as "not static", log at debug, proceed with install — a probe hiccup must never block a valid video |
 
 **General principle**: identical to Trawler — the whole per-song pipeline is wrapped; a failure
 logs and moves on; Emby's event/task loop is never exposed to an exception.

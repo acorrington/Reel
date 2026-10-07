@@ -73,6 +73,15 @@ public sealed class NeedsCheck
         // "with" clauses — only when preceded by something (keeps titles that *start* with With…)
         t = Regex.Replace(t, @"\s+with\s+.*$", " ");
 
+        // Version/mix qualifiers after " - " (F-31): "… - From X Soundtrack", "… - Single Version",
+        // "… - 2015 Remaster", "… - Radio Edit", "… - Promo 7 Edit", "… - 7 Version" name the same
+        // song; stripping them lets the title gate and needs-check match the plain video title.
+        // Applied before punctuation collapse so the dash separator is still visible.
+        t = Regex.Replace(
+            t,
+            @"\s+[-–—]\s+(?:.*\bfrom\b.*|.*remaster.*|single\b.*|radio\s+edit\b.*|promo\b.*|.*\bversion\b.*)$",
+            " ");
+
         // everything that isn't a letter or digit becomes a separator
         t = Regex.Replace(t, @"[^\p{L}\p{Nd}]+", " ");
 

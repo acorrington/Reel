@@ -248,8 +248,12 @@ public sealed class MatchGate
     /// song's artists, <paramref name="songTitle"/> the song's title, <paramref name="songDurationSeconds"/>
     /// the audio item's runtime; <paramref name="details"/> the candidate's YouTube metadata
     /// (null when it could not be fetched → reject, F-22).
+    /// <paramref name="officialSource"/> = true for IMVDb candidates (F-20b): IMVDb's entry IS
+    /// the official music video for this song, so the duration gate is skipped — the library
+    /// audio may be a promo/remix edit of a different length while the official video is still
+    /// the right music video. All other gates still run.
     /// </summary>
-    public GateDecision Evaluate(IReadOnlyList<string> artists, string songTitle, long songDurationSeconds, VideoDetails details)
+    public GateDecision Evaluate(IReadOnlyList<string> artists, string songTitle, long songDurationSeconds, VideoDetails details, bool officialSource = false)
     {
         if (details == null)
         {
@@ -270,7 +274,9 @@ public sealed class MatchGate
         var decision = CheckHygiene(videoNorm, channelNorm)
                        ?? CheckArtist(videoNorm, channelNorm, artists)
                        ?? CheckTitle(songNorm, videoNorm)
-                       ?? CheckDuration(songDurationSeconds, details.DurationSeconds);
+                       ?? (officialSource
+                           ? NullDurationGate(songNorm, details)
+                           : CheckDuration(songDurationSeconds, details.DurationSeconds));
 
         if (decision != null)
         {
@@ -278,8 +284,23 @@ public sealed class MatchGate
             return decision;
         }
 
-        _logger.Debug("Reel: gate: passed \"{0}\" ({1}s vs audio {2}s) [{3}]",
-            details.Title, details.DurationSeconds, songDurationSeconds, details.VideoId);
+        _logger.Debug("Reel: gate: passed \"{0}\" ({1}s vs audio {2}s{3}) [{4}]",
+            details.Title, details.DurationSeconds, songDurationSeconds,
+            officialSource ? ", duration gate skipped: IMVDb official entry" : string.Empty,
+            details.VideoId);
         return GateDecision.Pass(details.DurationSeconds);
+    }
+
+    /// <summary>F-20b: IMVDb official entry — duration gate skipped, but still require a known duration.</summary>
+    private GateDecision NullDurationGate(string songNorm, VideoDetails details)
+    {
+        if (details.DurationSeconds <= 0)
+        {
+            _logger.Debug("Reel: gate: reject (duration: video duration unknown)");
+            return GateDecision.Reject("duration", "video duration unknown");
+        }
+
+        _logger.Debug("Reel: gate: duration check skipped for IMVDb official entry ({0}s vs audio — official video wins)", details.DurationSeconds);
+        return null;
     }
 }
