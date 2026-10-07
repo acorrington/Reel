@@ -34,7 +34,8 @@ public sealed class PipelineResult
 ///   Confidence gate per candidate (F-20/21/22) — reject logs reason + videoId, next candidate
 ///   Resolve stream (Trawler chain: ANDROID progressive → IOS → ANDROID_VR → HTML, F-23)
 ///   Download to local temp → ffmpeg merge only if adaptive → move to TargetFolder (F-43/40)
-///   ILibraryMonitor report → RefreshMetadata → best-effort artist link (F-41/42)
+///   ILibraryMonitor report (F-41); the task then refreshes + artist-links indexed items
+///   in a post-pass (F-42 — Emby indexes new files after a 90 s monitor debounce).
 ///
 /// Never throws except on cancellation (E-02/E-05); bounded to 2 concurrent downloads (N-03).
 /// One instance per run (the ImvdbClient keeps its warn-once state and cache per run).
@@ -46,7 +47,6 @@ public sealed class ReelPipeline
     /// <summary>Bounded concurrency across all triggers (N-03): at most 2 downloads at once.</summary>
     private static readonly SemaphoreSlim Gate = new(2, 2);
 
-    private readonly ILibraryManager _libraryManager;
     private readonly ILibraryMonitor _libraryMonitor;
     private readonly IFfmpegManager _ffmpegManager;
     private readonly ILogger _logger;
@@ -54,7 +54,6 @@ public sealed class ReelPipeline
     private readonly DownloadMerger _merger;
     private readonly ImvdbClient _imvdb;
     private readonly MatchGate _matchGate;
-    private readonly Linker _linker;
 
     /// <summary>Shared needs-check snapshot — the task refreshes it once per run and the
     /// pipeline extends it after each install (E-08 intra-run dedup).</summary>
@@ -62,7 +61,6 @@ public sealed class ReelPipeline
 
     public ReelPipeline(ILibraryManager libraryManager, ILibraryMonitor libraryMonitor, IFfmpegManager ffmpegManager, ILogger logger)
     {
-        _libraryManager = libraryManager;
         _libraryMonitor = libraryMonitor;
         _ffmpegManager = ffmpegManager;
         _logger = logger;
@@ -70,7 +68,6 @@ public sealed class ReelPipeline
         _merger = new DownloadMerger(logger);
         _imvdb = new ImvdbClient(logger);
         _matchGate = new MatchGate(logger);
-        _linker = new Linker(libraryManager, logger);
         NeedsCheck = new NeedsCheck(libraryManager, logger);
     }
 
@@ -173,7 +170,7 @@ public sealed class ReelPipeline
                     continue;
                 }
 
-                var result = await TryDownloadInstallAsync(artistList, primaryArtist, title, savePath, candidate, config, ct).ConfigureAwait(false);
+                var result = await TryDownloadInstallAsync(primaryArtist, title, savePath, candidate, config, ct).ConfigureAwait(false);
                 if (result != null)
                 {
                     return result;
@@ -250,7 +247,6 @@ public sealed class ReelPipeline
     /// <summary>Resolve → download → merge → install → refresh → link one gated candidate.
     /// Returns null to try the next candidate, Ok/Fail to finish the song.</summary>
     private async Task<PipelineResult> TryDownloadInstallAsync(
-        IReadOnlyList<string> artists,
         string primaryArtist,
         string title,
         string savePath,
@@ -358,29 +354,9 @@ public sealed class ReelPipeline
             // Intra-run dedup: later songs with the same (artist, title) now skip (E-08).
             NeedsCheck.MarkInstalled(primaryArtist, title);
 
-            // --- refresh + best-effort artist link (F-41, F-42) ---
-            var musicVideo = await WaitForMusicVideoAsync(savePath, TimeSpan.FromSeconds(20), ct).ConfigureAwait(false);
-            if (musicVideo == null)
-            {
-                _logger.Info("Reel: {0} installed but Emby has not indexed the item yet — artist link skipped; the next run or a manual metadata refresh will link it", Path.GetFileName(savePath));
-            }
-            else
-            {
-                try
-                {
-                    await musicVideo.RefreshMetadata(ct).ConfigureAwait(false);
-                }
-                catch (OperationCanceledException)
-                {
-                    throw;
-                }
-                catch (Exception ex)
-                {
-                    _logger.Warn("Reel: metadata refresh failed for {0}: {1}", musicVideo.Name, ex.Message);
-                }
-
-                _linker.TryLink(musicVideo, artists, ct);
-            }
+            // Note: the MusicVideo item does not exist yet — Emby indexes new files with a
+            // LibraryMonitorDelaySeconds (90s) debounce. The task links artists in a post-pass
+            // once the run's installs are indexed (F-42 best effort, self-heals next run).
 
             return PipelineResult.Ok($"downloaded music video for {primaryArtist} – {title} from {videoId} ({streams.ResolvedBy}, {streams.Height}p{(streams.IsProgressive ? ", progressive" : "")})");
         }
@@ -439,27 +415,6 @@ public sealed class ReelPipeline
         }
 
         return false;
-    }
-
-    /// <summary>Poll ILibraryManager.FindByPath until Emby indexes the new file as a MusicVideo
-    /// (the library monitor reacts asynchronously). Returns null after the timeout.</summary>
-    private async Task<MusicVideo> WaitForMusicVideoAsync(string path, TimeSpan timeout, CancellationToken ct)
-    {
-        var deadline = DateTime.UtcNow + timeout;
-        while (DateTime.UtcNow < deadline)
-        {
-            ct.ThrowIfCancellationRequested();
-
-            var item = _libraryManager.FindByPath(path, false);
-            if (item is MusicVideo musicVideo)
-            {
-                return musicVideo;
-            }
-
-            await Task.Delay(TimeSpan.FromSeconds(1), ct).ConfigureAwait(false);
-        }
-
-        return null;
     }
 
     // ------------------------------------------------------------------ ffmpeg (same resolution order as Trawler)
