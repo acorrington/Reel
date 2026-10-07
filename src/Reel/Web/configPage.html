@@ -1,0 +1,65 @@
+<div is="emby-scroller" class="view flex flex-direction-column scrollFrameY flex-grow" data-horizontal="false" data-forcescrollbar="true" data-centerfocus="true" data-bindheader="true" data-controller="__plugin/reeljs" data-title="Reel">
+    <div class="scrollSlider flex-grow flex-direction-column padded-left padded-left-page padded-right padded-top-page padded-bottom-page">
+
+        <form class="auto-center" style="width:100%;max-width:42em;">
+            <h2 class="sectionTitle">Reel</h2>
+            <p class="fieldDescription">Downloads YouTube trailers for your movies and saves them next to your media as <em>{MovieName}-trailer.mp4</em>, so Emby plays them as local trailers.</p>
+
+            <div class="checkboxContainer">
+                <label>
+                    <input is="emby-checkbox" type="checkbox" id="EnableAutoDownload" />
+                    <span>Download trailers automatically when a movie is added</span>
+                </label>
+            </div>
+
+            <div class="inputContainer">
+                <input is="emby-input" type="number" id="TriggerDelaySeconds" min="0" label="Delay before download, seconds (lets metadata finish first):" />
+            </div>
+
+            <div class="inputContainer">
+                <input is="emby-input" type="number" id="MaxVideoHeight" min="0" label="Maximum trailer height in pixels (0 = best available):" />
+            </div>
+
+            <div class="checkboxContainer">
+                <label>
+                    <input is="emby-checkbox" type="checkbox" id="EnableYouTubeSearchFallback" />
+                    <span>Search YouTube for a trailer when a movie has no remote trailer URLs</span>
+                </label>
+            </div>
+
+            <div class="inputContainer">
+                <input is="emby-input" type="number" id="MaxSearchResults" min="1" max="10" label="Maximum search candidates to try:" />
+            </div>
+
+            <div class="inputContainer">
+                <input is="emby-input" type="text" id="FfmpegPathOverride" label="ffmpeg path (leave empty to use the ffmpeg bundled with Emby):" />
+            </div>
+
+            <h2 class="sectionTitle">YouTube settings</h2>
+            <p class="fieldDescription">If YouTube stops accepting a client version, the log will name the failing client — update the version here and restart the server. No rebuild needed.</p>
+
+            <div class="inputContainer">
+                <input is="emby-input" type="text" id="AndroidClientVersion" label="ANDROID client version (primary):" />
+            </div>
+
+            <div class="inputContainer">
+                <input is="emby-input" type="text" id="IosClientVersion" label="IOS client version (fallback / search):" />
+            </div>
+
+            <div class="checkboxContainer">
+                <label>
+                    <input is="emby-checkbox" type="checkbox" id="PreferIosClient" />
+                    <span>Query the IOS client first (use when ANDROID requests are blocked from your network)</span>
+                </label>
+            </div>
+
+            <div class="inputContainer">
+                <input is="emby-input" type="text" id="LastRunSummary" label="Last scheduled task run:" readonly />
+            </div>
+
+            <div>
+                <button is="emby-button" type="submit" class="raised button-submit block"><span>${Save}</span></button>
+            </div>
+        </form>
+    </div>
+</div>

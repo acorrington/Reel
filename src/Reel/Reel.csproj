@@ -1,0 +1,55 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <AssemblyName>Reel</AssemblyName>
+    <RootNamespace>Reel</RootNamespace>
+    <LangVersion>latest</LangVersion>
+    <Nullable>disable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Version>1.0.0</Version>
+    <Product>Reel</Product>
+    <Description>Finds and downloads music videos for your music library.</Description>
+    <CopyLocalLockFileAssemblies>false</CopyLocalLockFileAssemblies>
+    <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
+    <NoWarn>$(NoWarn);CS1591</NoWarn>
+  </PropertyGroup>
+
+  <!--
+    Emby server reference assemblies (MediaBrowser.*.dll) live in the Emby install's
+    "system" folder. Provide it via -p:EmbySystemPath=... or the EMBY_SYSTEM_PATH
+    environment variable — no machine-specific paths in this file.
+  -->
+  <PropertyGroup>
+    <EmbySystemPath Condition="'$(EmbySystemPath)' == ''">$(EMBY_SYSTEM_PATH)</EmbySystemPath>
+  </PropertyGroup>
+
+  <Target Name="EnsureEmbySystemPath" BeforeTargets="ResolveAssemblyReferences"
+          Condition="'$(EmbySystemPath)' == '' or !Exists('$(EmbySystemPath)\MediaBrowser.Common.dll')">
+    <Error Text="Emby reference assemblies not found. Pass -p:EmbySystemPath=&quot;C:\Path\To\Emby-Server\system&quot; or set the EMBY_SYSTEM_PATH environment variable to your Emby server's 'system' folder." />
+  </Target>
+
+  <ItemGroup>
+    <Reference Include="MediaBrowser.Common">
+      <HintPath>$(EmbySystemPath)\MediaBrowser.Common.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="MediaBrowser.Controller">
+      <HintPath>$(EmbySystemPath)\MediaBrowser.Controller.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="MediaBrowser.Model">
+      <HintPath>$(EmbySystemPath)\MediaBrowser.Model.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+  </ItemGroup>
+
+  <!-- Embedded resources: plugin thumb + dashboard config page -->
+  <ItemGroup>
+    <EmbeddedResource Include="thumb.jpg" LogicalName="Reel.thumb.jpg" />
+    <EmbeddedResource Include="Web\configPage.html" LogicalName="Reel.Web.configPage.html" />
+    <EmbeddedResource Include="Web\configPage.js" LogicalName="Reel.Web.configPage.js" />
+  </ItemGroup>
+
+</Project>

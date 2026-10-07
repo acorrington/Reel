@@ -1,0 +1,16 @@
+# only these top-level paths are published
+/*
+!/src
+!/tools
+!/README.md
+!/REQUIREMENTS.md
+!/.gitignore
+
+# build output
+bin/
+obj/
+.vs/
+
+# local secrets / scratch
+tools/emby-token.txt
+tools/login-response.json
