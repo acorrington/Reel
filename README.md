@@ -24,9 +24,9 @@ music library, so Emby can show them on artist pages and play them like any othe
   → `/api/v1/entity/{id}?include=artist_videos` → title match → `/video/{id}?include=sources`.
   The documented search path stays primary and will be used again if IMVDb lifts the block.
 - **Artist-link race (F-42):** Emby's own delayed `LibraryMonitor` refresh (~90 s) can
-  overwrite links set immediately after install. The self-heal pass at the start of the next
-  run re-links them (observed: 12 then 17 wiped → 0 unlinked afterwards). This is by design;
-  a fully link-stable run needs one extra task run after the downloads.
+  overwrite links set right after install. The `ItemUpdated` listener re-links within
+  seconds (primary); the task's post-pass and next-run self-heal remain as backstops —
+  observed wiping (12, then 17 items) always ends at 0 unlinked.
 - "Live" videos pass by default (the F-21 spec list has no `live` pattern) — add it to
   `ExcludeTitlePatterns` if unwanted.
 - Search runs on the InnerTube **WEB** client: the IOS client stopped serving search results
@@ -115,12 +115,22 @@ Single DLL, no NuGet packages beyond the framework (N-01); thumb + config page a
 
 ## Linking music videos to artist pages (F-42)
 
-Emby indexes new files with a 90 s `LibraryMonitorDelaySeconds` debounce, so Reel links
-artists in a task post-pass (waits up to ~160 s for indexing) and again in a self-heal pass
-at the start of the next run: it resolves the song's artist names to library Artist items and
-persists `Artists` + `ArtistItems` via `BaseItem.UpdateToRepository` (verified against
-4.10.1 with `tools/EmbyLinkProbe`). If a link ever fails, the log names the item — link it
-manually from the item's edit page; the next run retries automatically.
+Two mechanisms, both verified on 4.10.1 (API surface probed with `tools/EmbyLinkProbe`):
+
+1. **`ArtistLinkEntryPoint` — ItemUpdated listener (primary).** Whenever a MusicVideo under
+   `TargetFolder` is saved without artist links (initial indexing, or Emby's background
+   refresh overwriting fresh links), the artist is parsed from the `{Artist} - {Title}`
+   filename convention and persisted via `BaseItem.UpdateToRepository` — *within seconds of
+   the save, no task run required*. Proven end-to-end: install → task cancelled → index
+   fires ~90 s later → `linked artist(s) … (via ItemUpdated)` → links present. Loop-safe:
+   the handler's own save sees links populated and returns (one bounce maximum), and it
+   never throws into Emby's event loop.
+2. **Task post-pass + self-heal (backstop).** After each run, installs are polled until
+   indexed, refreshed and linked; the start of the next run re-links anything still empty
+   (observed wiping pattern before the listener existed: 12 then 17 items → 0 afterwards).
+
+If a link ever fails, the log names the item — link it manually from the item's edit page;
+the listener and next run retry automatically.
 
 ## Tools
 
