@@ -1,0 +1,17 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>disable</Nullable>
+    <AssemblyName>EmbyLinkProbe</AssemblyName>
+    <RootNamespace>EmbyLinkProbe</RootNamespace>
+  </PropertyGroup>
+
+  <!--
+    Deliberately NO compile-time references: everything is loaded dynamically from the
+    Emby server's system folder so this tool works against any server version.
+  -->
+
+</Project>
