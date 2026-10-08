@@ -42,6 +42,15 @@ public sealed class NeedsCheck
     /// song itself has no artist tag — never as a cross-artist match).</summary>
     private readonly HashSet<string> _titleOnly = new(StringComparer.Ordinal);
 
+    /// <summary>normTitle → normalized artists of installed videos/files with that title —
+    /// enables credit-containment matching in <see cref="IsSatisfied"/> (E-08).</summary>
+    private readonly Dictionary<string, HashSet<string>> _artistsByTitle = new(StringComparer.Ordinal);
+
+    /// <summary>Artist names marking a cover/tribute act: containment matching is disabled for
+    /// them so a tribute video can never satisfy the original act's song (nor vice versa).</summary>
+    private static readonly string[] CoverActMarkers =
+        { "tribute", "karaoke", "orchestra", "symphony", "quartet", "philharmonic", "ensemble" };
+
     public NeedsCheck(ILibraryManager libraryManager, ILogger logger)
     {
         _libraryManager = libraryManager;
@@ -70,8 +79,11 @@ public sealed class NeedsCheck
         // feat./ft./featuring clauses — drop the collaborator tail entirely
         t = Regex.Replace(t, @"\s*(?:feat\.?|ft\.?|featuring)\s+.*$", " ");
 
-        // "with" clauses — only when preceded by something (keeps titles that *start* with With…)
-        t = Regex.Replace(t, @"\s+with\s+.*$", " ");
+        // "with" clauses — only clear noise tails (…with Lyrics / …with Subtitles). A song
+        // genuinely TITLED "Rock with You" must keep its "with": the old strip-any rule
+        // reduced it to "rock", which passed the title gate against "You Rock My World"
+        // and installed the wrong video (2026-10-08).
+        t = Regex.Replace(t, @"\s+with\s+.*\b(?:lyrics?|subtitles?|subtitled|interview|footage|comments)\b", " ");
 
         // Version/mix qualifiers after " - " (F-31): "… - From X Soundtrack", "… - Single Version",
         // "… - 2015 Remaster", "… - Radio Edit", "… - Promo 7 Edit", "… - 7 Version" name the same
@@ -81,6 +93,10 @@ public sealed class NeedsCheck
             t,
             @"\s+[-–—]\s+(?:.*\bfrom\b.*|.*remaster.*|single\b.*|radio\s+edit\b.*|promo\b.*|.*\bversion\b.*)$",
             " ");
+
+        // Bare " remaster(ed) <year>" tails with no dash: "White Wedding Pt. 1 Remastered 2002"
+        // is the same song as "White Wedding - Pt. 1" (2026-10-08 duplicate-download fix).
+        t = Regex.Replace(t, @"\s+remaster(?:ed)?(?:\s+\d{4})?$", " ");
 
         // everything that isn't a letter or digit becomes a separator
         t = Regex.Replace(t, @"[^\p{L}\p{Nd}]+", " ");
@@ -100,6 +116,20 @@ public sealed class NeedsCheck
         return (" " + haystack + " ").Contains(" " + needle + " ", StringComparison.Ordinal);
     }
 
+    /// <summary>Does this normalized artist name look like a cover/tribute act (E-08 guard)?</summary>
+    private static bool LooksLikeCoverAct(string normArtist)
+    {
+        foreach (var marker in CoverActMarkers)
+        {
+            if (normArtist.Contains(marker, StringComparison.Ordinal))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
     // ------------------------------------------------------------------ snapshot
 
     /// <summary>Load every MusicVideo item and every video file in the target folder.
@@ -109,6 +139,7 @@ public sealed class NeedsCheck
         _pairs.Clear();
         _flats.Clear();
         _titleOnly.Clear();
+        _artistsByTitle.Clear();
 
         BaseItem[] musicVideos;
         try
@@ -145,7 +176,10 @@ public sealed class NeedsCheck
         AddVideo(title, new[] { artist }, "newly installed file");
     }
 
-    /// <summary>Does a music video for (artist(s), title) already exist?</summary>
+    /// <summary>Does a music video for (artist(s), title) already exist? Artists match exactly
+    /// or by phrase containment for overlapping credits (E-08: "Bill Medley" vs "Bill Medley &
+    /// Jennifer Warnes" = same recording credited differently across albums); cover/tribute
+    /// act names are excluded from containment so a tribute video never satisfies the original.</summary>
     public bool IsSatisfied(IReadOnlyList<string> artists, string title)
     {
         var normTitle = Normalize(title);
@@ -176,6 +210,35 @@ public sealed class NeedsCheck
                 {
                     _logger.Debug("Reel: needs-check: \"{0}\" ({1}) matched an installed file", title, artist);
                     return true;
+                }
+            }
+        }
+
+        // Artist containment (E-08): the same recording may be credited to a subset/superset
+        // of artists on different albums. Phrase containment (either direction) counts — but
+        // never for cover-act names, so a tribute video can't silently satisfy the original.
+        if (artists != null && _artistsByTitle.TryGetValue(normTitle, out var storedArtists))
+        {
+            foreach (var artist in artists)
+            {
+                var normArtist = Normalize(artist);
+                if (normArtist.Length == 0 || LooksLikeCoverAct(normArtist))
+                {
+                    continue;
+                }
+
+                foreach (var stored in storedArtists)
+                {
+                    if (LooksLikeCoverAct(stored))
+                    {
+                        continue;
+                    }
+
+                    if (ContainsNormalized(stored, normArtist) || ContainsNormalized(normArtist, stored))
+                    {
+                        _logger.Debug("Reel: needs-check: \"{0}\" ({1}) matched an installed video via overlapping artist credit \"{2}\"", title, artist, stored);
+                        return true;
+                    }
                 }
             }
         }
@@ -244,6 +307,13 @@ public sealed class NeedsCheck
             any = true;
             _pairs.Add(normArtist + KeySep + normTitle);
             _flats.Add(normArtist + " " + normTitle);
+            if (!_artistsByTitle.TryGetValue(normTitle, out var titleArtists))
+            {
+                titleArtists = new HashSet<string>(StringComparer.Ordinal);
+                _artistsByTitle[normTitle] = titleArtists;
+            }
+
+            titleArtists.Add(normArtist);
         }
 
         if (!any)

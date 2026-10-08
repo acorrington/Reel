@@ -29,6 +29,18 @@ music library, so Emby can show them on artist pages and play them like any othe
   observed wiping (12, then 17 items) always ends at 0 unlinked.
 - "Live" videos pass by default (the F-21 spec list has no `live` pattern) — add it to
   `ExcludeTitlePatterns` if unwanted.
+- **Overlapping artist credits download once (E-08 containment):** the same recording credited
+  to a subset/superset of artists across albums (`Bill Medley` vs `Bill Medley & Jennifer
+  Warnes`) now dedupes in needs-check — artist phrases match in either direction, but never
+  for cover-act names (tribute/karaoke/orchestra/…) so a tribute video can't satisfy the
+  original act's song. Byte-identical pairs created before this fix can be cleaned up by
+  deleting one file + its library item; the survivor's artist links cover both credits.
+- **"With"-clause stripping is noise-only (2026-10-08):** the old rule stripped *any* ` with …`
+  tail, reducing "Rock with You" to `rock` — which then passed the title gate against "You
+  Rock My World" (it contains `rock`) and installed the **wrong video** (both servers). The
+  strip now requires a noise word (lyrics/subtitles/interview/footage/comments). Bare
+  ` remaster(ed) <year>` tails (no dash) also strip now, so "White Wedding Pt. 1 Remastered
+  2002" dedupes against "White Wedding - Pt. 1".
 - Search runs on the InnerTube **WEB** client: the IOS client stopped serving search results
   entirely (2026-10) — root cause of Reel's first failed run (1833 "no candidates"). Version
   is editable as `WebSearchClientVersion` (E-03-style proofing).

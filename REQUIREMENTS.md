@@ -68,8 +68,8 @@ wrong song with the same title). The core requirement of this plugin is therefor
 
 | ID | Requirement | Priority |
 |----|-------------|----------|
-| F-30 | Before downloading for song X, query existing MusicVideo items: consider it satisfied if an MV exists whose normalized title ≈ song title **and** shares an artist link (or artist name) | Must |
-| F-31 | Normalization: case, punctuation, `feat.`/`ft.`/`with` clauses, bracketed suffixes, `(Live)`/`(Remastered)` markers, and trailing qualifier tails after ` - ` (`- From … Soundtrack`, `- Single Version`, `- 2015 Remaster`, `- Radio Edit`, `- Promo 7 Edit`, `- 7 Version`) | Must |
+| F-30 | Before downloading for song X, query existing MusicVideo items: consider it satisfied if an MV exists whose normalized title ≈ song title **and** shares an artist link (or artist name — phrase containment counts for overlapping credits like "Bill Medley" vs "Bill Medley & Jennifer Warnes", never for cover-act names containing tribute/karaoke/orchestra/…) | Must |
+| F-31 | Normalization: case, punctuation, `feat.`/`ft.` clauses, `with` clauses **only when they end in noise words** (lyrics/subtitles/interview/footage/comments — a song titled "Rock with You" keeps its "with"), bracketed suffixes, `(Live)`/`(Remastered)` markers, trailing qualifier tails after ` - ` (`- From … Soundtrack`, `- Single Version`, `- 2015 Remaster`, `- Radio Edit`, `- Promo 7 Edit`, `- 7 Version`), and bare ` remaster(ed) <year>` tails | Must |
 | F-32 | A song failing F-30 counts as "missing"; already-downloaded songs are never re-fetched (file + item both checked, like Trawler's F-02) | Must |
 
 ### 3.5 Install, naming and linking
@@ -145,7 +145,7 @@ player response `lengthSeconds` (no extra download needed) or IMVDB metadata whe
 | E-05 | Download/merge failure | one retry, then skip; temps deleted in `finally` |
 | E-06 | Two runs overlap | single global `SemaphoreSlim` + per-song dedup (inherited pattern) |
 | E-07 | Shutdown mid-run | token propagated from Emby; partial files removed next run (scan temp dir age > 1 h) |
-| E-08 | Same song under multiple albums | needs-check keys on (artist, title), not album — download once |
+| E-08 | Same song under multiple albums | needs-check keys on (artist, title), not album — download once; artist credits match by phrase containment across overlapping variants ("Bill Medley" ⊂ "Bill Medley & Jennifer Warnes"), cover-act names excluded |
 | E-09 | Static-image probe fails (ffmpeg missing/timeout) | treat as "not static", log at debug, proceed with install — a probe hiccup must never block a valid video |
 
 **General principle**: identical to Trawler — the whole per-song pipeline is wrapped; a failure
