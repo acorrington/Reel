@@ -39,8 +39,11 @@ music library, so Emby can show them on artist pages and play them like any othe
   tail, reducing "Rock with You" to `rock` — which then passed the title gate against "You
   Rock My World" (it contains `rock`) and installed the **wrong video** (both servers). The
   strip now requires a noise word (lyrics/subtitles/interview/footage/comments). Bare
-  ` remaster(ed) <year>` tails (no dash) also strip now, so "White Wedding Pt. 1 Remastered
-  2002" dedupes against "White Wedding - Pt. 1".
+  ` remaster(ed) <year>` tails (no dash) also strip now — *before* the dash-tail rule, so
+  "White Wedding Pt. 1 Remastered 2002" dedupes against "White Wedding - Pt. 1" instead of
+  having its whole ` - Pt. 1 Remastered 2002` segment nuked. Needs-check additionally keys
+  a **bracket-content-merged** variant of every title, so "Saturday Night's Alright (For
+  Fighting)" and the plain-title file share one installed video.
 - Search runs on the InnerTube **WEB** client: the IOS client stopped serving search results
   entirely (2026-10) — root cause of Reel's first failed run (1833 "no candidates"). Version
   is editable as `WebSearchClientVersion` (E-03-style proofing).

@@ -64,7 +64,30 @@ public sealed class NeedsCheck
     /// ((Live)/(Remastered)/[2011 Remaster]…), feat./ft./with clauses, and all punctuation.
     /// Applied identically to both sides of every comparison.
     /// </summary>
-    public static string Normalize(string value)
+    public static string Normalize(string value) => NormalizeImpl(value, true);
+
+    /// <summary>Alternate needs-check key that keeps bracket CONTENT ("Saturday Night's Alright
+    /// (For Fighting)" → the same key as "…For Fighting"). Keyed alongside <see cref="Normalize"/>
+    /// so paren-title-variant albums share one installed video (F-31, 2026-10-08).</summary>
+    public static string NormalizeInline(string value) => NormalizeImpl(value, false);
+
+    /// <summary>Title keys used by needs-check: stripped + bracket-inlined, distinct non-empty.</summary>
+    private static IEnumerable<string> TitleKeys(string value)
+    {
+        var stripped = Normalize(value);
+        if (stripped.Length > 0)
+        {
+            yield return stripped;
+        }
+
+        var inline = NormalizeInline(value);
+        if (inline.Length > 0 && !string.Equals(inline, stripped, StringComparison.Ordinal))
+        {
+            yield return inline;
+        }
+    }
+
+    private static string NormalizeImpl(string value, bool stripBrackets)
     {
         if (string.IsNullOrWhiteSpace(value))
         {
@@ -73,8 +96,10 @@ public sealed class NeedsCheck
 
         var t = value.Trim().ToLowerInvariant();
 
-        // bracketed suffixes / markers / credits
-        t = Regex.Replace(t, @"\([^)]*\)|\[[^\]]*\]", " ");
+        // bracketed suffixes / markers / credits (inline variant keeps the content)
+        t = stripBrackets
+            ? Regex.Replace(t, @"\([^)]*\)|\[[^\]]*\]", " ")
+            : Regex.Replace(t, @"[()\[\]]", " ");
 
         // feat./ft./featuring clauses — drop the collaborator tail entirely
         t = Regex.Replace(t, @"\s*(?:feat\.?|ft\.?|featuring)\s+.*$", " ");
@@ -85,6 +110,13 @@ public sealed class NeedsCheck
         // and installed the wrong video (2026-10-08).
         t = Regex.Replace(t, @"\s+with\s+.*\b(?:lyrics?|subtitles?|subtitled|interview|footage|comments)\b", " ");
 
+        // Bare remaster tails FIRST (2026-10-08): "… Pt. 1 Remastered 2002", "… - Remastered
+        // 2014", "… - 2015 Remaster". The general dash-tail rule below must not swallow the
+        // whole "- Pt. 1 Remastered 2002" segment — that keyed the song as just "white
+        // wedding" while its plain file keyed as "white wedding pt 1", re-downloading a
+        // byte-identical duplicate on every run.
+        t = Regex.Replace(t, @"(?:\s*[-–—]\s*|\s+)(?:\d{4}\s+)?remaster(?:ed)?(?:\s+\d{4})?\s*$", " ");
+
         // Version/mix qualifiers after " - " (F-31): "… - From X Soundtrack", "… - Single Version",
         // "… - 2015 Remaster", "… - Radio Edit", "… - Promo 7 Edit", "… - 7 Version" name the same
         // song; stripping them lets the title gate and needs-check match the plain video title.
@@ -93,10 +125,6 @@ public sealed class NeedsCheck
             t,
             @"\s+[-–—]\s+(?:.*\bfrom\b.*|.*remaster.*|single\b.*|radio\s+edit\b.*|promo\b.*|.*\bversion\b.*)$",
             " ");
-
-        // Bare " remaster(ed) <year>" tails with no dash: "White Wedding Pt. 1 Remastered 2002"
-        // is the same song as "White Wedding - Pt. 1" (2026-10-08 duplicate-download fix).
-        t = Regex.Replace(t, @"\s+remaster(?:ed)?(?:\s+\d{4})?$", " ");
 
         // everything that isn't a letter or digit becomes a separator
         t = Regex.Replace(t, @"[^\p{L}\p{Nd}]+", " ");
@@ -182,12 +210,19 @@ public sealed class NeedsCheck
     /// act names are excluded from containment so a tribute video never satisfies the original.</summary>
     public bool IsSatisfied(IReadOnlyList<string> artists, string title)
     {
-        var normTitle = Normalize(title);
-        if (normTitle.Length == 0)
+        foreach (var normTitle in TitleKeys(title))
         {
-            return false;
+            if (IsSatisfiedFor(normTitle, artists, title))
+            {
+                return true;
+            }
         }
 
+        return false;
+    }
+
+    private bool IsSatisfiedFor(string normTitle, IReadOnlyList<string> artists, string title)
+    {
         var hasArtist = false;
         if (artists != null)
         {
@@ -289,12 +324,14 @@ public sealed class NeedsCheck
 
     private void AddVideo(string title, IEnumerable<string> artists, string source)
     {
-        var normTitle = Normalize(title);
-        if (normTitle.Length == 0)
+        foreach (var normTitle in TitleKeys(title))
         {
-            return;
+            AddKeys(normTitle, title, artists, source);
         }
+    }
 
+    private void AddKeys(string normTitle, string title, IEnumerable<string> artists, string source)
+    {
         var any = false;
         foreach (var artist in artists ?? Enumerable.Empty<string>())
         {
